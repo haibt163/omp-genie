@@ -24,18 +24,25 @@ same command on Windows, macOS, and Linux.
 ## Rules
 
 1. Do not copy text or code from unlicensed projects. Prompts and rubrics must be original writing.
-2. Keep every OMP import version-gated and isolated. The judge adapter must stay in `src/judge.ts`;
-   do not scatter internal imports.
+2. Keep every internal OMP import isolated and capability-gated. The judge adapter must stay in
+   `src/judge.ts`; do not scatter internal imports. Do not add a version regex as a substitute for a
+   runtime capability check.
 3. Do not send evidence outside the user-invoked `/genie` flow. Do not bypass the TUI consent check.
+   Do not show credentials or URL secrets in the dialog.
 4. Never present an unverified or conflicting finding as a confirmed defect. The next prompt for an
    unverified finding must start with verification.
-5. Do not claim comprehensive secret protection. Add planted-secret tests for new patterns and
+5. Keep default `/genie` static-only. Do not add `bash`, `eval`, `debug`, `task`, MCP, or another
+   execution-capable tool to the allowlist. Do not execute proposed verification commands in-extension
+   unless OMP exposes a verified way to force its normal approval prompt.
+6. Do not make the independent judge's impact answer a scoring input without an evaluation and an
+   explicit design decision. It is advisory/display-only.
+7. Do not claim comprehensive secret protection. Add planted-secret tests for new patterns and
    document false positives.
-6. Do not add a database, persistent cache, telemetry, background timer, or network listener.
-7. Candidate validation, citation checks, scoring, classification, and evidence-status downgrades
+8. Do not add a database, persistent cache, telemetry, background timer, or network listener.
+9. Candidate validation, citation checks, scoring, classification, and evidence-status downgrades
    belong in code, not in model prose.
-8. Keep `prompts/genie.md` and `prompts/rubric.md` readable and editable by users.
-9. Do not publish, create releases, or configure a remote as part of normal development.
+10. Keep `prompts/genie.md` and `prompts/rubric.md` readable and editable by users.
+11. Do not publish, create releases, or configure a remote as part of normal development.
 
 ## Tests
 
@@ -46,14 +53,19 @@ Deterministic tests cover:
 - quote/range checks;
 - secret redaction and terminal-control stripping;
 - scoring, generic cap, classification, evidence status;
-- judge interpretation, incomplete answers, degraded mode;
-- consent refusal, unavailable UI, backend attribution.
+- judge interpretation, incomplete answers, missing answer ids, missing attribution, degraded mode;
+- consent refusal, unavailable UI, backend attribution, endpoint-host sanitisation;
+- static allowlist parsing, fail-closed activation, tool-call blocking, restoration after
+  completion/continue/failure/session transition;
+- verification mode never activating an execution tool.
 
 Live model evaluation is opt-in and never part of CI:
 
 ```sh
+GENIE_SAFETY_EVAL=1 npm run safety:live
 GENIE_LIVE_EVAL=1 npm run eval:live
 GENIE_LIVE_EVAL=1 GENIE_EVAL_FILTER=docs-drift npm run eval:live
+GENIE_LIVE_EVAL=1 GENIE_EVAL_REPETITIONS=3 npm run eval:live
 ```
 
 PowerShell: `$env:GENIE_LIVE_EVAL = "1"` before the command. Live runs copy fixtures to temp
@@ -63,12 +75,12 @@ directories, use `--auto-approve` only for disposable fixtures, and must not wri
 
 Any change to the OMP API boundary must update:
 
-- the tested OMP version in `README.md` and `docs/architecture.md`;
-- the version gate in `src/judge.ts` if the judge contract changes;
+- the tested OMP version and classification in `README.md` and `docs/compatibility.md`;
+- the capability checks in `src/judge.ts` if the judge contract changes;
 - `docs/verification.md` with a new source citation or observed result;
 - tests that fail closed when the API is missing.
 
-Do not silently widen a version range based on a `main`-branch API.
+Do not silently widen a version range based on a `main`-branch API or a single probe pass.
 
 ## Dependency licences
 
