@@ -125,10 +125,10 @@ function modelInfo(model: unknown): JudgeModelInfo | undefined {
 	return { provider, id, api, baseUrl };
 }
 
-function sameFamily(ctx: ExtensionContext, primary: JudgeModelInfo): boolean {
+function sameFamily(ctx: ExtensionContext, primaryModel: unknown): boolean {
 	if (ctx.model === undefined) return false;
 	try {
-		return ctx.models.family(primary as HostModel) === ctx.models.family(ctx.model);
+		return ctx.models.family(primaryModel as HostModel) === ctx.models.family(ctx.model);
 	} catch {
 		// If the host cannot compare families, independence cannot be established.
 		return true;
@@ -271,8 +271,10 @@ export async function probeJudge(ctx: ExtensionContext, version: string): Promis
 		return unavailable("judge API shape is incompatible");
 	}
 	let primary: JudgeModelInfo | undefined;
+	let primaryModel: unknown;
 	try {
-		primary = modelInfo(judge.primaryModel());
+		primaryModel = judge.primaryModel();
+		primary = modelInfo(primaryModel);
 	} catch {
 		return unavailable("judge route could not report its primary model");
 	}
@@ -284,7 +286,7 @@ export async function probeJudge(ctx: ExtensionContext, version: string): Promis
 	if (!capability.adapterShapes) {
 		return unavailable("judge question/answer shapes are incompatible with this adapter");
 	}
-	if (sameFamily(ctx, primary)) {
+	if (sameFamily(ctx, primaryModel)) {
 		return {
 			available: false,
 			reason: "judge resolves to the active model family; it is not independent",
