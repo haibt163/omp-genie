@@ -7,7 +7,7 @@ Last updated: 2026-11-27. Core extension and judge adapter are separate claims.
 | Check | Version | Evidence | Status |
 | --- | --- | --- | --- |
 | Deterministic suite (`npm run check`) | 19.2.1 on Windows | 57 tests, 56 pass, 1 symlink test skipped on this host | VERIFIED |
-| Remote CI matrix | 19.2.1 | GitHub Actions run `45970206897` on `0259804`: ubuntu-latest, macos-latest, windows-latest all 57 tests / 57 pass / 0 fail | VERIFIED |
+| Remote CI matrix | 19.2.1 | GitHub Actions run `45970384648` on `88a1081`: ubuntu-latest, macos-latest, windows-latest all 57 tests / 57 pass / 0 fail | VERIFIED |
 | Extension loads headless | 19.2.1 | `omp --mode json -p "/genie" --no-session -e src/extension.ts` completed | VERIFIED |
 | Default static-only live run | 19.2.1 | `npm run safety:live`; no bash/eval/task call, marker file absent with `--auto-approve` | VERIFIED |
 | Verification proposal mode | 19.2.1 | same live check; proposed-command section present; no execution tool ran | VERIFIED |

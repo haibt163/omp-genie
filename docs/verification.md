@@ -548,7 +548,7 @@ per-fixture costs, metric limits, and every case where Genie adds nothing.
 
 `README.md` now documents `git clone`, `omp -e`, `omp plugin install`, `omp plugin list`, and
 `omp plugin uninstall` for Windows and macOS/Linux. `omp plugin install` was not exercised against the
-owner's OMP environment. `npm run check` is the deterministic gate. GitHub Actions run `45970206897`
-on `0259804` passed 57/57 tests on ubuntu-latest, macos-latest, and windows-latest. That is a test
+owner's OMP environment. `npm run check` is the deterministic gate. GitHub Actions run `45970384648`
+on `88a1081` passed 57/57 tests on ubuntu-latest, macos-latest, and windows-latest. That is a test
 result, not proof that the full extension runtime works on macOS/Linux; full runtime remains exercised
 on Windows only.
