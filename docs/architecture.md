@@ -31,7 +31,7 @@ flowchart TD
     J -- no --> DG["Degraded: NOT INDEPENDENTLY JUDGED"]
     X --> R["Compute heuristic scores, classifications, top 3"]
     DG --> R
-    R --> O["Report + exact prompts + /genie-run hint"]
+    R --> O["Custom genie-report row + exact prompts + /genie-run hint"]
     O --> P["User: /genie-run [n] (explicit)"]
     P --> M["sendUserMessage(exact prompt)"]
 ```
@@ -84,7 +84,8 @@ reason; the core report still works. No `main`-branch API is assumed.
   from the report and tell the user to copy one.
 - Send the selected exact prompt through `pi.sendUserMessage`; never auto-run and never modify files.
 - The last result is held in an in-memory map keyed by session id. It is cleared on session
-  switch/shutdown. It is not a database, not persisted, and not a recommendation cache across sessions.
+  switch, clear, and shutdown. It is not a database, not persisted, and not a recommendation cache
+  across sessions.
 
 ## 5. Evidence gathering
 
@@ -115,12 +116,12 @@ network scans, or make background calls. Issue reads via `gh` are read-only and 
 
 | Field | Limit |
 | --- | --- |
-| Candidates | 1–5 |
+| Candidates | 0–5 |
 | Goals summary | 1–1200 chars |
 | Lens entries | exactly 9, one per lens |
 | Title | 1–160 chars |
 | Observed / why it matters / verify-or-do | 1–800 chars each |
-| Evidence items per candidate | 1–6 |
+| Evidence items per candidate | 0–6 |
 | Evidence quote | ≤400 chars |
 | Next prompt | 1–4000 chars |
 | Owner-decision question | 8–400 chars, 2–5 options |
@@ -281,8 +282,12 @@ At most the top three by final score. The tool returns Markdown containing:
 - A footer reminding the user that `/genie-run <n>` is the only way to run a prompt, and that prompts
   for unverified findings begin with verification.
 
-The main prompt tells the model to present the tool's report without adding findings. The tool's
-report is sanitised again before return.
+The tool also queues the exact report as a custom transcript row:
+`pi.sendMessage({ customType: "genie-report", content: report, display: true, attribution: "agent",
+excludeFromContext: true })` (`docs/extensions.md:383-427`; `types.ts:2231-2234`). This makes the
+authoritative report visible even if the model paraphrases its tool result. The prompt tells the model
+to reply with one short pointer instead of repeating or reformatting the report. The tool result and
+the row are both generated from the same sanitised string.
 
 ## 11. Failure handling
 
@@ -300,6 +305,7 @@ report is sanitised again before return.
 | Judge error/timeout | Degraded; short sanitised reason. |
 | Judge same family as active | Degraded; "judge resolves to the active model family". |
 | Judge partial answers | Degraded; no invented scores. |
+| Custom report row cannot be queued | The tool result still carries the report; no second failure. |
 | `/genie-run` without result | Notify; no action. |
 | User abort | Abort propagation; no report. |
 
@@ -328,7 +334,7 @@ Compatibility table will be maintained in the README:
 
 | OMP | Core | Judge adapter |
 | --- | --- | --- |
-| 19.2.1 | tested | tested (Phase 2/3) |
+| 19.2.1 | tested | adapter import/settings/route tested; actual network call unverified |
 | 19.2.x | expected | best-effort, version-gated |
 | <19.2.1 | unsupported | disabled |
 | >=20 | unsupported until revalidated | disabled |

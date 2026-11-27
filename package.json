@@ -1,0 +1,36 @@
+{
+	"name": "omp-genie",
+	"version": "0.1.0",
+	"private": true,
+	"description": "User-invoked project opportunity discovery and prioritisation for OMP.",
+	"license": "MIT",
+	"type": "module",
+	"omp": {
+		"extensions": [
+			"./src/extension.ts"
+		]
+	},
+	"files": [
+		"src",
+		"prompts",
+		"README.md",
+		"LICENSE"
+	],
+	"engines": {
+		"bun": ">=1.4.4"
+	},
+	"peerDependencies": {
+		"@oh-my-pi/pi-coding-agent": ">=19.2.1 <20"
+	},
+	"devDependencies": {
+		"@oh-my-pi/pi-coding-agent": "19.2.1",
+		"@types/node": "^22.10.0",
+		"typescript": "^5.7.0"
+	},
+	"scripts": {
+		"typecheck": "tsc -p tsconfig.json --noEmit",
+		"test": "node --experimental-strip-types --test test/validation.test.ts test/evidence.test.ts test/sanitize.test.ts test/scoring.test.ts test/judge.test.ts test/tool.test.ts",
+		"check": "npm run typecheck && npm test",
+		"eval:live": "node --experimental-strip-types scripts/eval-live.ts"
+	}
+}

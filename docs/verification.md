@@ -239,7 +239,8 @@ with multiple typed questions, or degrade.
 
 ### 4.4 Can an extension invoke a one-shot judgement with only the evidence it supplies, without the full conversation?
 
-**Yes, through the internal judge adapter — VERIFIED by interface, runtime UNVERIFIED.**
+**Yes, through the internal judge adapter — interface and compiled-host capability VERIFIED; actual
+network call UNVERIFIED.**
 
 `resolveJudge(deps).judge({ state, questions })` sends exactly `state` and `questions`. There is no
 conversation field in `JudgmentRequest` (`packages/ai/src/judgment/types.ts:116-121`). The judge
@@ -254,9 +255,11 @@ The session's live settings are reachable from the extension context through the
 `ctx.modelRegistry` (`types.ts:841-843`). This avoids creating a second auth store or provider
 registry.
 
-**Runtime status:** the subpath import and the `mirrorInputs()` shape must be proved in Phase 2
-against the compiled `omp` binary. Until then this is UNVERIFIED. The adapter must return a visible
-degraded result if either check fails.
+**Runtime status:** verified in Phase 2 on the compiled `omp` 19.2.1 binary: a probe extension
+imported the subpath, read `ctx.modelRegistry.mirrorInputs().settings`, resolved the judge route, and
+reported the primary `typesafe/jev-1.14.0` model. The actual network judgement call was not made
+without a consenting interactive session, so that part remains UNVERIFIED and is exercised by a fake
+judge in deterministic tests.
 
 ### 4.5 Which backend actually answered?
 
@@ -310,7 +313,9 @@ in OMP's session cost totals, and do not claim complete cost accounting.
 - Genie will pass `ctx.modelRegistry` and `ctx.modelRegistry.mirrorInputs().settings`; it will not
   create an auth store, provider registry, or credential file.
 
-**Runtime status:** UNVERIFIED until the Phase 2 compiled-host smoke test.
+**Runtime status:** the compiled-host probe confirmed that `resolveJudge` receives the live registry
+and settings and resolves a primary judge model. The actual credential-bearing network call remains
+UNVERIFIED until a consenting TUI run (not performed during development).
 
 ### 4.9 What happens when judgement is unavailable, incompatible, or unauthenticated?
 
@@ -428,8 +433,8 @@ None of these is a stop condition under §14 of the brief.
 | 2. No supported way to start a normal tool-capable turn | `pi.sendUserMessage` starts a normal prompt when idle; verified in docs and source. | Does not stop |
 | 3. Material licence conflict | OMP MIT; Genie can be MIT. Prior-art licences reviewed; Genie-Prompt is unlicensed and will not be copied. | Does not stop |
 | 4. Required operation modifies an existing project or OMP config | Development and tests will use the new repository, temp dirs, and isolated fixtures. Installation is documented only. | Does not stop |
-| 5. External transmission outside the user-invoked flow | Only the judge call inside `/genie`, with consent when the destination differs. | Does not stop |
-| 6. Evidence sent without affirmative consent | Design requires TUI `confirm` before a separate destination; otherwise degrade. | Does not stop |
+| 5. External transmission outside the user-invoked flow | Only the judge call inside `/genie`, with TUI consent; headless runs never call the judge. | Does not stop |
+| 6. Evidence sent without affirmative consent | Design requires an interactive TUI `confirm` for every judge call; otherwise it degrades. | Does not stop |
 | 7. Significant excluded component required | No MCP server, vector DB, orchestration, multi-agent system, database, or persistent cache is required. | Does not stop |
 
 ### Verdict
@@ -442,8 +447,10 @@ code-checked citations + heuristic ranking → top three with exact prompts → 
 
 Limitations to carry into design and documentation:
 
-- Independent judgement uses an internal OMP export behind a version-gated adapter; it is UNVERIFIED
-  on the compiled binary until Phase 2 and must degrade cleanly.
+- Independent judgement uses an internal OMP export behind a version-gated adapter. The adapter's
+  import, settings access, and primary-route resolution are now VERIFIED on the compiled 19.2.1
+  binary; the actual network judgement call is still UNVERIFIED (no consent-based live call was made).
+  It must degrade cleanly.
 - Judge usage is reportable but not ledger-integrated.
 - Local secret sanitisation is best-effort, not comprehensive.
 - Consent and pick-to-run are TUI-only; headless runs degrade/display prompts.
@@ -451,4 +458,29 @@ Limitations to carry into design and documentation:
   implementation, not just in the README.
 - Model-quality evaluation is opt-in and cannot establish calibration.
 
-Proceed to Phase 1 design only after this verdict. No implementation has begun.
+Proceed to Phase 1 design only after this verdict. No implementation had begun at the Phase 0 gate; the
+appendix records later verification evidence without rewriting the gate.
+
+---
+
+## Appendix — Phase 2 compiled-host and live-run evidence (2026-11-27)
+
+These checks were run after the Phase 0 verdict, during implementation, and are recorded here so the
+verification document stays honest.
+
+| Check | Command / evidence | Result | Status |
+| --- | --- | --- | --- |
+| Extension loads in the compiled host | `omp --mode rpc --no-ui --no-session -e src/extension.ts` | Exit 0; no extension load errors; RPC ready | VERIFIED |
+| Commands register | same run's `available_commands_update` | `genie` and `genie-run` present | VERIFIED |
+| Tool registers | `pi.getAllTools()` from a probe extension on 19.2.1 | `genie_rank` present, inactive by default | VERIFIED |
+| Per-run activation | `pi.setActiveTools([...before, "genie_rank"])` then removal | Added and removed correctly | VERIFIED |
+| `resolveJudge` subpath import | Probe extension calling `probeJudge(ctx, VERSION)` on 19.2.1 | `available: true`; primary `typesafe/jev-1.14.0` (`typesafe`) | VERIFIED |
+| Session settings access | same probe via `ctx.modelRegistry.mirrorInputs().settings` | Non-null; judge resolved | VERIFIED |
+| Actual network judgement call | not run | No consent-based live call; fake judge tested deterministically | UNVERIFIED |
+| Live `/genie` turn | `omp --mode json -p "/genie"` on a copied fixture, headless | Completed; full report in final assistant message; 2–3 recommendations; `genie_rank` called | VERIFIED |
+| Headless degraded mode | same live run | Report says **NOT INDEPENDENTLY JUDGED — interactive consent is unavailable** | VERIFIED |
+| Full live fixture suite | `scripts/eval-live.ts` | Results recorded in `docs/evals.md` and `evals/.runs/` (local) | See `docs/evals.md` |
+
+The live run also showed that the main model can execute read-only verification commands (`npm run
+start`, `npm run build`, a port check) during the Genie turn. The extension itself did not modify the
+fixture; the fixture was a disposable temp copy.

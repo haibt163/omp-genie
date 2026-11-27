@@ -1,0 +1,81 @@
+{
+	"version": 1,
+	"description": "Answer key for the opt-in live evaluation. Keep this directory outside any fixture cwd and copy fixtures to a temporary directory before running Genie.",
+	"fixtures": [
+		{
+			"name": "security-token",
+			"seeded": true,
+			"expectedLenses": ["security"],
+			"hitTerms": ["config.ts", "stripe", "secret", "credential"],
+			"issue": "A Stripe credential is hard-coded in src/config.ts. The repository stores a neutral placeholder; the eval harness injects a runtime-built fake token in the copied fixture."
+		},
+		{
+			"name": "tests-missing",
+			"seeded": true,
+			"expectedLenses": ["correctness", "tests_ci"],
+			"hitTerms": ["divide", "average", "zero", "empty", "pytest", "test"],
+			"issue": "calc.py divides without guards and has no tests; invoice.py uses average on an empty invoice."
+		},
+		{
+			"name": "perf-quadratic",
+			"seeded": true,
+			"expectedLenses": ["performance"],
+			"hitTerms": ["dedupe", "quadratic", "some", "set", "50,000", "o(n"],
+			"issue": "dedupeEvents uses Array.some inside a loop on batches of up to 50,000 events."
+		},
+		{
+			"name": "docs-drift",
+			"seeded": true,
+			"expectedLenses": ["documentation", "release_operations"],
+			"hitTerms": ["npm run start", "start", "dev", "readme"],
+			"issue": "README documents npm run start, but package.json only defines dev and build."
+		},
+		{
+			"name": "deps-duplicate",
+			"seeded": true,
+			"expectedLenses": ["dependencies", "architecture"],
+			"hitTerms": ["moment", "date-fns", "duplicate"],
+			"issue": "date-fns and moment are both installed and used for the same date formatting job."
+		},
+		{
+			"name": "architecture-duplicate",
+			"seeded": true,
+			"expectedLenses": ["architecture", "correctness"],
+			"hitTerms": ["0.2", "0.21", "vat", "tax", "duplicate", "pricing"],
+			"issue": "Two modules own VAT/tax math with different rates (20% vs 21%)."
+		},
+		{
+			"name": "roadmap-gap",
+			"seeded": true,
+			"expectedLenses": ["roadmap_intent", "tests_ci"],
+			"hitTerms": ["csv", "v0.2", "export", "roadmap"],
+			"issue": "Roadmap promises CSV export in v0.2, but only JSON export exists."
+		},
+		{
+			"name": "release-ops",
+			"seeded": true,
+			"expectedLenses": ["tests_ci", "release_operations"],
+			"hitTerms": ["npm test", "test script", "ci", "workflow"],
+			"issue": "CI runs npm test, but package.json has no test script and no tests exist."
+		},
+		{
+			"name": "clean-control",
+			"seeded": false,
+			"expectedLenses": [],
+			"hitTerms": [],
+			"issue": "No seeded significant issue. It has a focused source file, tests, README, and CI."
+		}
+	],
+	"genericTerms": [
+		"add tests",
+		"more tests",
+		"improve documentation",
+		"update dependencies",
+		"add ci",
+		"use typescript",
+		"consider refactoring",
+		"best practices",
+		"code quality",
+		"monitor performance"
+	]
+}
