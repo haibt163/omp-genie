@@ -1,7 +1,8 @@
 # OMP Genie architecture
 
-Status: design for OMP 19.2.1. Phase 0 evidence: [`verification.md`](./verification.md).
-No implementation is claimed by this document.
+Status: implemented and hardened for pre-announcement. Tested host: OMP 19.2.1 on Windows.
+Compatibility record: [`compatibility.md`](./compatibility.md). Historical Phase 0 evidence:
+[`verification.md`](./verification.md).
 
 ## 1. Product boundary
 
@@ -11,106 +12,148 @@ Genie is a user-invoked OMP extension that answers one question:
 > and what exact prompt should I run to investigate or address it?
 
 It is not a code reviewer, task runner, autonomous agent, Jev wrapper, MCP server, or replacement for
-OMP's tools. It never edits project files, commits, opens PRs, installs dependencies, or runs a
-recommendation without an explicit user command.
+OMP's tools. Default `/genie` is static-only. It does not run project scripts, tests, builds, package
+managers, git, or `gh`. It does not edit, commit, push, or open PRs.
 
 ## 2. Flow
 
 ```mermaid
 flowchart TD
-    U["User: /genie [focus]"] --> C["Command handler: validate focus, activate genie_rank, sendUserMessage"]
-    C --> T["Normal OMP turn (tools available)"]
-    T --> G["Main model reads goals + fixed lenses, gathers evidence"]
+    U["User: /genie [--verify] [focus]"] --> S["Snapshot active tools"]
+    S --> R["Set explicit static allowlist + genie_rank"]
+    R --> V{"Active set exactly allowed?"}
+    V -- no --> F["Restore snapshot; refuse to start"]
+    V -- yes --> T["Normal OMP turn with read/grep/glob/genie_rank"]
+    T --> G["Main model reads files and sweeps nine lenses"]
     G --> A{"Material ambiguity?"}
     A -- yes --> Q["Ask one focused question; stop"]
     A -- no --> K["Up to 5 structured candidates -> genie_rank"]
-    K --> V["Validate shape + size + citations"]
-    V --> S["Local sanitisation + 16 KiB judge state"]
-    S --> J{"TUI + independent judge available?"}
-    J -- yes --> X["TUI consent -> judge() -> actual backend/usage"]
-    J -- no --> DG["Degraded: NOT INDEPENDENTLY JUDGED"]
-    X --> R["Compute heuristic scores, classifications, top 3"]
-    DG --> R
-    R --> O["Custom genie-report row + exact prompts + /genie-run hint"]
-    O --> P["User: /genie-run [n] (explicit)"]
-    P --> M["sendUserMessage(exact prompt)"]
+    K --> C["Validate shape, limits, citations"]
+    C --> H["Local sanitisation + 16 KiB judge state"]
+    H --> J{"TUI + consent + judge capability?"}
+    J -- yes --> X["Consent dialog -> judge -> actual backend/usage"]
+    J -- no --> D["Degraded: NOT INDEPENDENTLY JUDGED"]
+    X --> O["Compute heuristic score/classification/top 3"]
+    D --> O
+    O --> P["Custom genie-report row + exact prompts + proposed commands"]
+    P --> Z["Restore original active tools"]
 ```
 
 ## 3. Host APIs
 
-All citations are OMP `v19.2.1` (`b55cd1bb664d8ab46ddc77f2a34eb47555dbf1ac`).
+All citations refer to the installed OMP 19.2.1 source. The extension is an OMP/Pi module, not a
+Claude Code extension.
 
 | Need | API | Evidence | Compatibility |
 | --- | --- | --- | --- |
-| Register commands | `pi.registerCommand(name, { handler })` | `types.ts:1859-1863`, `2098-2107` | Public extension API |
-| Start a normal tool-capable turn | `pi.sendUserMessage(text, { attribution: "agent" })` when idle | `docs/extensions.md:399-408`; `agent-session.ts:11664-11715`; `agent-session-types.ts:576-580` | Public; verified |
-| Register ranking tool | `pi.registerTool(...)`; `execute(..., ctx: ExtensionContext)` | `types.ts:1052-1101` | Public |
-| Activate tool only for a Genie run | `pi.getActiveTools()` / `pi.setActiveTools(names)` | `types.ts:2248-2255` | Public |
+| Register commands | `pi.registerCommand(name, { handler })` | `types.ts:1859-1863`, `2098-2107` | Public |
+| Start a normal turn | `pi.sendUserMessage(text, { attribution: "agent" })` when idle | `docs/extensions.md:399-408`; `agent-session.ts:11664-11715` | Public; verified |
+| Register ranking tool | `pi.registerTool(...)`; `execute(..., ctx)` | `types.ts:1052-1101` | Public |
+| Read active tools | `pi.getActiveTools()` | `types.ts:2248-2255` | Public; verified |
+| Restrict active tools | `pi.setActiveTools(names)` | `types.ts:2248-2255`; `session-tools.ts:1503-1600` | Public; verified live |
+| Block a tool call | `pi.on("tool_call", handler)` returning `{ block, reason }` | `types.ts:1725-1780`; `shared-events.ts:345-366` | Public; verified in tests |
+| Read host version | `pi.pi.VERSION` | injected package exports; `extensibility/extensions/types.ts:1944` | Public; verified live |
 | Read project paths | `ctx.cwd` | `types.ts:838-839` | Public |
-| Show consent / picker | `ctx.ui.confirm` / `ctx.ui.select`; gate on `ctx.mode === "tui" && ctx.hasUI` | `types.ts:393-394`, `825-849`; `docs/extensions.md:1044-1049`, `1245-1247` | Public; TUI only for this feature |
-| Resolve/inspect judge | `resolveJudge({settings, registry, sessionModel, sessionId, purpose})` | `judgment/index.ts:459-461`; `JudgeDeps` `97-135` | **Internal package export** `package.json:360-363`; version-gated |
-| Live session settings for judge | `ctx.modelRegistry.mirrorInputs().settings` | `model-registry.ts:881-883`, `5268-5277` | Public accessor returning internal shape; version-gated |
-| One judge request | `judge.withCandidate(...)` / `judge.judge({state, questions})` | `judgment/index.ts:510-578`; `packages/ai/src/judgment/types.ts:116-143` | Internal adapter only |
-| Actual backend + usage | `JudgmentResult { api, provider, model, answers, usage }` | `judgment/index.ts:1023-1029`; `types.ts:123-130` | Available only when judge ran |
-| Stop after suitable results | `pi.sendUserMessage` from `/genie-run` | same as above | Public |
+| Consent / picker | `ctx.ui.confirm` / `ctx.ui.select`; gate on `ctx.mode === "tui" && ctx.hasUI` | `types.ts:393-394`, `825-849`; `docs/extensions.md:1044-1049`, `1245-1247` | Public; TUI only |
+| Resolve/inspect judge | `resolveJudge({settings, registry, sessionModel, sessionId, purpose})` | `judgment/index.ts:459-461`; `JudgeDeps` `97-135` | Internal package export; capability-gated |
+| Live settings | `ctx.modelRegistry.mirrorInputs().settings` | `model-registry.ts:881-883` | Public accessor returning internal shape |
+| Judge primary/fallbacks | `primaryModel()`; `config/model-resolver.resolveRoleChain`, `config/model-roles.roleCandidatePool` | `judgment/index.ts:567-574`; `model-resolver.ts:1847-1883` | Internal; fallback list degrades to text |
+| One judge request | `judge.withCandidate(...)` / `judge.judge({state, questions})` | `judgment/index.ts:510-578`; `ai/judgment/types.ts:116-143` | Internal; capability-gated |
+| Actual backend + usage | `JudgmentResult { api, provider, model, answers, usage }` | `judgment/index.ts:1023-1029` | Required for attribution |
 
-**Version boundary.** Core extension APIs: tested on `19.2.1`; declared support `>=19.2.1 <20`.
-Judge adapter: tested only on `19.2.1` initially; allowed only when `VERSION` starts with `19.2.`
-and the runtime capability checks pass. Anything else disables independent judgement with a visible
-reason; the core report still works. No `main`-branch API is assumed.
+**Version boundary.** Core extension APIs were tested on 19.2.1. The judge adapter is not gated by a
+version regex. It is allowed only when every runtime capability check passes. Anything else disables
+independent judgement with a visible reason; the core report still works. An untested OMP version is
+allowed through the same checks but is labelled **UNTESTED OMP VERSION** in the dialog and report.
 
-## 4. Command behaviour
+## 4. Execution safety
 
-### `/genie [focus]`
+`src/safety.ts` owns the policy:
 
-- Run only in the main session: if `ctx.agent.kind !== "main"`, notify that Genie is main-session
-  only and stop. The tool rejects subagent calls for the same reason.
-- Focus: empty (all lenses) or one of `architecture`, `security`, `performance`, `roadmap`, `tests`,
-  `dependencies`. Unknown values are rejected with the allowed list; no turn starts.
-- `await ctx.waitForIdle()` before starting.
-- Capture whether `genie_rank` is already active. If not, add it to the active set only for this run.
-  Register the tool with `defaultInactive: true` so normal turns do not carry its schema.
-- Send the contents of `prompts/genie.md` with the focus interpolated, `attribution: "agent"`, via
-  `pi.sendUserMessage`. Catch `PromptDroppedError`/other errors, restore the tool set, and notify.
-- On a terminal `agent_end` (`!event.willContinue && !event.awaitingAsyncWork`), remove `genie_rank`
-  if this run activated it. Do not remove a tool the user had already activated.
+```text
+STATIC_TOOL_ALLOWLIST = read, grep, glob
++ genie_rank
+```
+
+OMP 19.2.1 may also add host-managed command tools (`resolve`, `reject`, `propose`, `report_issue`).
+They do not run project code. Anything else in the active set after `setActiveTools` is a failure:
+Genie restores the snapshot and refuses to start.
+
+Deliberately excluded: `bash`, `eval` (Python/JS), `debug`, `task`, `wait`, `lsp`, `find`,
+`web_search`, `write`, `edit`, `ast_edit`, `github`, `checkpoint`, `rewind`, `security_scan`, memory
+tools, MCP tools, and all extension tools. `read` can open archives/databases in-process; it does not
+execute project code.
+
+`src/extension.ts` snapshots the exact active set before every run and restores it after:
+
+- terminal `agent_end` (`willContinue` and `awaitingAsyncWork` are false);
+- `sendUserMessage` failure;
+- `session_clear`;
+- `session_before_switch`, `session_before_branch`, `session_before_tree` (the transition is
+  cancelled if restoration fails);
+- `session_shutdown`.
+
+The restore uses the snapshot, so a tool the user had enabled is not removed. A `tool_call` guard
+blocks a non-allowlisted tool even if it is somehow invoked. `genie_rank` itself uses `approval:
+"read"` and has no filesystem write path.
+
+### Verification proposal mode
+
+`/genie --verify` uses the same static allowlist. The main model may return at most three
+`verificationCommands` `{ command, purpose }` objects. The report prints them in fenced blocks and
+states that Genie did not execute them.
+
+OMP exposes `tool_call` blocking and approval events, but no extension API to force a normal approval
+prompt when the host was launched with `--auto-approve`. An extension could add its own UI confirmation,
+but that is a second approval mechanism, not OMP's normal one. The implementation therefore stops at a
+proposal and lets the user run the command under their own policy. This is a deliberate fail-closed
+choice, not an execution feature.
+
+## 5. Command behaviour
+
+### `/genie [--verify] [focus]`
+
+- Main session only. Unknown options/focus rejected; no turn starts.
+- `await ctx.waitForIdle()`.
+- Reject a second concurrent Genie run in the same session.
+- Parse focus: empty/all or one of `architecture`, `security`, `performance`, `roadmap`, `tests`,
+  `dependencies`.
+- Load `prompts/genie.md` + `prompts/rubric.md`; inject focus and static/verification mode.
+- Snapshot active tools, set the explicit allowlist plus `genie_rank`, read it back, and fail closed
+  if anything unexpected remains or `genie_rank` is missing.
+- Send the prompt through `pi.sendUserMessage`. On failure, delete the run and restore.
+- On terminal end, restore and delete the run.
 
 ### `/genie-run [1-3]`
 
-- Run only in the main session (`ctx.agent.kind === "main"`).
-- Requires a prior result for the current session; otherwise notify.
-- With an index, use it directly. Without an index, show `ctx.ui.select` with the top-three titles.
-- Only TUI (`ctx.mode === "tui" && ctx.hasUI`) offers the picker. Other modes only display the prompts
-  from the report and tell the user to copy one.
-- Send the selected exact prompt through `pi.sendUserMessage`; never auto-run and never modify files.
-- The last result is held in an in-memory map keyed by session id. It is cleared on session
-  switch, clear, and shutdown. It is not a database, not persisted, and not a recommendation cache
-  across sessions.
+- Main session, TUI only, requires a prior report in the same session.
+- With an index, use it. Without, show `ctx.ui.select` over the top-three titles.
+- Send the exact stored prompt through `pi.sendUserMessage`. This is the user explicitly running a
+  prompt; it is not Genie executing a recommendation and it uses the user's current tools/approval
+  policy.
+- The last report is held in memory keyed by session id and cleared on switch/clear/shutdown. It is
+  not persisted.
 
-## 5. Evidence gathering
+## 6. Evidence gathering
 
 `prompts/genie.md` instructs the main model to:
 
-1. Read the project's self-description first: `README*`, docs/roadmap, `AGENTS.md`/`CLAUDE.md`,
-   package manifests, `git status --short`, and recent `git log --oneline`. Read-only `gh issue list`
-   / `gh pr list` only if already configured and authenticated; otherwise mark issues unavailable.
-2. State the apparent goals in about three lines and distinguish inspected sources from unavailable
-   ones. If an ambiguity would materially change the recommendations, ask one focused question and
-   stop without calling `genie_rank`. Otherwise proceed with explicit assumptions.
-3. Sweep the nine fixed lenses: correctness, security, architecture, performance, tests/CI,
-   documentation, dependencies, roadmap/intent, release/operations. Classify each as:
-   `finding`, `no_finding`, `not_inspected`, or `not_applicable`.
-   "No finding" is not "clean"; the report says what was inspected.
-4. Propose at most five candidates. Each must be project-specific and evidence-backed. Generic
-   advice is penalised. Evidence should cite paths and line ranges; if exact lines are unavailable,
-   say so rather than inventing them.
-5. Call `genie_rank` exactly once with the goals, lens coverage, assumptions, and candidates.
-6. Present the tool's report. Do not add new findings or re-rank after the tool returns.
+1. Read the project's self-description first: `README*`, docs/roadmap, package manifests, and release
+   or test process files.
+2. State apparent goals in about three lines and distinguish inspected sources from unavailable ones.
+   If an ambiguity would materially change the recommendation, ask one focused question and stop.
+3. Sweep nine fixed lenses: correctness, security, architecture, performance, tests/CI, documentation,
+   dependencies, roadmap/intent, release/operations. Each is `finding`, `no_finding`,
+   `not_inspected`, or `not_applicable`.
+4. Propose at most five project-specific, evidence-backed candidates. Generic advice is penalised.
+5. Call `genie_rank` exactly once.
+6. Present the tool's report; do not re-rank or add findings.
 
-The model may use normal OMP tools. It may not install packages, modify files, commit, push, run
-network scans, or make background calls. Issue reads via `gh` are read-only and user-invoked.
+Static mode has no git, `gh`, shell, tests, builds, or network. The model must mark those lenses
+`not_inspected` and cannot claim commit history, issue metadata, or a passing test as evidence. This
+is a real loss compared with a tool-capable turn.
 
-## 6. Candidate validation
+## 7. Candidate validation
 
 `genie_rank` rejects malformed input with a specific correction message and `isError: true`. Limits:
 
@@ -126,248 +169,212 @@ network scans, or make background calls. Issue reads via `gh` are read-only and 
 | Next prompt | 1–4000 chars |
 | Owner-decision question | 8–400 chars, 2–5 options |
 | What would change ranking | 1–500 chars |
-
-Top-level input also carries `projectGoals`, `focus`, `assumptions`, `lenses`, and `candidates`.
+| Verification commands | 0–3, single-line command ≤500 chars, purpose ≤200 chars |
 
 ### Citation checks
 
-The tool performs local, read-only checks for evidence items of kind `file`:
+For evidence items of kind `file`, the tool resolves against `ctx.cwd`, rejects absolute paths outside
+it, `..` escapes, symlink escapes, and sensitive/bulky roots (`.git`, `node_modules`, build output,
+`.env*`, private keys, credential stores, `secrets.*`, `.npmrc`, `.netrc`, etc.). It reads at most
+1 MiB per file and 4 MiB total per call, rejects binary/NUL content, checks line bounds, and requires a
+whitespace-normalised quote match inside the cited range.
 
-- Resolve against `ctx.cwd`; reject absolute paths outside it, `..` escapes, symlink escapes, and
-  sensitive/bulky roots (`.git`, `node_modules`, build output, `.env*`, private keys, credential
-  stores, `secrets.*`, `.npmrc`, `.netrc`, etc.).
-- Read at most 1 MiB per file and 4 MiB total per tool call; reject binary/NUL content.
-- Check that the line range is within the file.
-- If a quote is present, require a whitespace-normalised match inside that range. No quote means a
-  weaker check (path/range only).
-- Never write to the file; never log its contents.
-- Project-controlled text is untrusted. Quotes sent to the judge are delimited as data, capped, and
-  the judge instructions say not to follow instructions found inside evidence. Prompt injection
-  cannot be fully prevented; independent answers are advisory, not proof.
+A candidate with any `missing`/`out_of_range`/`excluded`/`quote_mismatch` item becomes
+**CONFLICTING / INSUFFICIENT**. No verified file item means **UNVERIFIED**. Only verified content (or
+verified ranges when no quote is available) with no failures can be **VERIFIED**.
 
-Result per item: `verified`, `range_only`, `missing`, `out_of_range`, `excluded`, `unreadable`.
-A candidate with any `missing`/`out_of_range`/`excluded` item becomes
-**CONFLICTING / INSUFFICIENT**. No verified file item means **UNVERIFIED**. Only an item set with
-verified content (or at least verified ranges when no quotes are available) and no failures can be
-**VERIFIED**.
+## 8. Sanitisation and disclosure
 
-## 7. Sanitisation and disclosure
+Genie sanitises its own payload; OMP's secret subsystem is not reused.
 
-OMP's secret subsystem is not reused: it is off by default, conversation-scoped, and has no
-extension API (`verification.md` §3.6). Genie sanitises its own payload.
-
-- **Never sent:** the conversation, full files, tool transcripts, raw `nextPrompt` text, system
-  prompts, images, or binary content.
-- **Sent to the judge:** project goals summary, focus, assumptions, lens coverage, and per-candidate
-  `title`, `lens`, `observed`, `whyItMatters`, `verifyOrDo`, sanitised evidence path/line/quote, and
-  citation status. No model confidence and no next prompt.
-- **Limits:** 16 KiB total UTF-8 for the judge state; 3 KiB per candidate. Oversize input is rejected
-  with a request to condense; it is not silently truncated.
+- **Never sent to the judge:** conversation, full files, tool transcripts, raw `nextPrompt`, system
+  prompts, images, binary content.
+- **Sent:** project goals, focus, assumptions, lens coverage, and per-candidate title, lens, observed,
+  why it matters, verify-or-do, sanitised evidence path/line/quote, citation status.
+- **Limits:** 16 KiB total UTF-8; oversize input is rejected, not silently truncated.
 - **Path exclusions:** `.env*`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `id_rsa*`, `id_ed25519*`,
-  `.npmrc`, `.pypirc`, `.netrc`, `secrets.*`, credential stores, `.git/`, `node_modules/`, build
-  output, and binary/oversize files.
-- **Content redaction:** common token/key formats (AWS, GitHub, GitLab, OpenAI, Anthropic, Google,
-  Slack, npm, Stripe, Hugging Face, SendGrid), JWTs, Bearer headers, PEM private-key blocks,
-  connection URLs with passwords, and conservative `password|secret|token|api_key` assignments.
-  Replacements are deterministic `[REDACTED:<kind>]` markers.
-- Redaction runs before consent size is computed, before sending, and before report text is emitted.
-  It is best-effort. False positives and false negatives are possible and documented. No claim of
-  comprehensive secret protection is made.
+  `.npmrc`, `.pypirc`, `.netrc`, `secrets.*`, credential stores, `.git/`, `node_modules/`, build output,
+  binary/oversize files.
+- **Content redaction:** common token/key formats, JWTs, Bearer headers, PEM blocks, connection URLs
+  with passwords, and conservative password/secret/token assignments. This is best-effort; false
+  positives and negatives are possible.
 
-### Consent
+## 9. Consent
 
-- Any independent judge call requires `ctx.mode === "tui" && ctx.hasUI` and an affirmative
-  `ctx.ui.confirm`. Headless, RPC, ACP, or any host without an interactive confirmation degrades
-  without sending evidence. This is stricter than the brief's "separate destination" minimum and
-  removes ambiguity about what `/genie` alone authorises.
-- The dialog names the primary provider/model/api where known, says OMP's configured judge route may
-  fall back to other candidates, lists evidence categories, shows the sanitised byte count, and states
-  that redaction is best-effort.
-- Declined, no UI, or headless: no judge request; degraded report.
-- If the judge resolves to the same model family as the active model, independent judgement is
-  refused as not independent even if consent is given.
-- The judge call is still labelled with the actual returned backend, which may differ from the
-  primary destination shown in the dialog.
+One rule everywhere: **no judge transmission without affirmative consent through an available
+interactive mechanism, otherwise degrade and send nothing.**
 
-## 8. Judge adapter
+- Requires `ctx.mode === "tui" && ctx.hasUI` and an affirmative `ctx.ui.confirm`.
+- The dialog names the primary provider/model/API and sanitised endpoint host, lists configured
+  fallback candidates when enumerable, states where OMP takes them when not, lists evidence categories
+  and approximate sanitised bytes, and says another provider may answer.
+- Declined, no UI, headless, RPC, ACP, no credentials, same-family route, capability failure, partial
+  answers, missing attribution, or error: **NOT INDEPENDENTLY JUDGED** with a short reason.
+- The actual returned provider/model/API is reported; the primary in the dialog is not assumed to be
+  the answerer.
+- `/genie` is not consent to send evidence to an additional provider.
 
-One module, `src/judge.ts`, owns every internal OMP judgement dependency.
+## 10. Judge adapter
 
-- Gate on `VERSION` supporting `19.2.x`.
-- Dynamic `import("@oh-my-pi/pi-coding-agent/judgment")`, validate `resolveJudge` is a function.
-- Read `ctx.modelRegistry.mirrorInputs?.().settings`; validate non-null.
-- Build `resolveJudge({ settings, registry: ctx.modelRegistry, sessionModel: ctx.model,
-  sessionId: ctx.sessionManager.getSessionId(), purpose: "genie" })`.
-- Use `primaryModel()` for the consent destination. If missing, degrade.
-- Refuse if the primary model is the active model's family (not independent).
-- Call `judge.withCandidate(async (candidateJudge, kind) => candidateJudge.judge({state, questions},
-  { signal }), { signal })` with one combined request. `kind` (`native` / prompted) is reported.
-- Questions per candidate:
-  - `noul`: "Would this recommendation apply to almost any repository, rather than being materially
-    specific to this project?" (true = generic).
-  - `noul`: "Does the supplied evidence support the stated observation without relying on
-    assumptions?"
-  - `score`: "If acted on, how much would this improve the project's stated goals?" with
-    `Negligible`, `Minor`, `Material`, `Major`, `Critical`.
-- Validate every expected answer id. Missing answers = degraded, not partially invented.
-- Report `result.api/provider/model/usage`, actual backend, and `kind`. If `kind === "prompted"`,
-  say the probabilities are not calibrated.
-- Do not journal usage into the session ledger (not exposed via `ReadonlySessionManager`); report the
-  returned usage and state that it is not included in OMP session totals.
-- Catch import/shape/credential/timeout/backend errors and return a short, sanitised reason. Never
-  include raw error payloads that might contain credentials or URLs.
+`src/judge.ts` owns every internal OMP judgement dependency and all capability checks.
 
-## 9. Scoring and classification
+- Dynamic import `@oh-my-pi/pi-coding-agent/judgment`; a missing subpath must not break the extension.
+- Require `resolveJudge`, live settings, a resolved handle, `withCandidate`/`judge`, `primaryModel`,
+  and a provider/model/API/baseUrl.
+- Round-trip the adapter's `noul` and `score` question/answer shapes through the interpreter.
+- Refuse a primary in the active model's family.
+- Enumerate fallbacks through the user's own settings:
+  `config/model-roles.roleCandidatePool("judge", settings, registry)` and
+  `config/model-resolver.resolveRoleChain("judge", settings, pool)`. If those internal subpaths are
+  unavailable, keep the judge and show the textual route
+  (`modelRoles.judge` → `retry.fallbackChains.judge` / role defaults → session-model fallback).
+- Call `withCandidate` with one state and all questions; report the returned `kind` (`native` / prompted).
+- Require every expected answer id, plus non-empty `api`, `provider`, and `model`. Missing anything is
+  degraded, never partially invented.
+- Report usage/cost returned by the judge and state that it is not in OMP's session ledger.
+- On an untested OMP version, allow only if all checks pass and label **UNTESTED OMP VERSION**.
 
-Scale: impact/alignment/feasibility are model-supplied integers 1–5; evidence strength is computed by
-code from citation checks (1 = none, 2 = one range-only, 3 = one verified quote or two ranges,
-4 = two verified quotes, 5 = three or more verified quotes). The composite:
+Judge questions per candidate:
+
+- `noul`: would this apply to almost any repository? (generic control)
+- `noul`: does the supplied evidence support the observation? (evidence-support downgrade)
+- `score`: how much would this improve the stated goals? (advisory/display-only; not scored)
+
+## 11. Scoring and classification
+
+Impact, alignment, and feasibility are main-model inputs (75% combined); evidence strength is computed
+by code from citation checks (25%). The judge is secondary: it can cap a generic item and downgrade
+evidence support. Its impact rating is advisory/display-only and does not enter the total.
+
+The unused judge impact question is retained deliberately: it is displayed as an independent second
+opinion beside the main model's impact, and removing it would change the report surface and require a
+fresh evaluation. It is not a hidden score input, and no formula change was made to make the judge
+look influential.
 
 | Component | Weight | Formula |
 | --- | ---: | --- |
 | Impact | 30 | `((impact - 1) / 4) * 30` |
-| Alignment with stated goals | 30 | `((alignment - 1) / 4) * 30` |
-| Evidence strength | 25 | `((evidenceStrength - 1) / 4) * 25` |
+| Alignment | 30 | `((alignment - 1) / 4) * 30` |
+| Evidence strength | 25 | `((strength - 1) / 4) * 25` |
 | Feasibility | 15 | `((feasibility - 1) / 4) * 15` |
-| **Total** | **100** | sum, rounded to integer |
+| **Total** | **100** | rounded sum |
 
-The label is always **Priority score (heuristic)**. It is not a probability, expected utility, or
+Evidence strength: 5 = three or more verified quotes; 4 = two verified quotes; 3 = one verified quote
+or two verified ranges; 2 = one verified range; 1 = no verified file citation.
+
+**Generic cap:** independent `generic ≥ 0.65` caps at 40 and is labelled independent. In degraded mode
+only, `genericRisk ≥ 0.70` applies the same cap and is labelled self-assessment.
+
+**Evidence support:** independent `support ≤ 0.35` downgrades to **CONFLICTING / INSUFFICIENT**, shown
+as a disagreement.
+
+**Classification order:**
+
+1. Valid `ownerDecision` and score ≥ 50 → **OWNER DECISION REQUIRED**.
+2. Score ≥ 70 and impact ≥ 4 → **MUST FIX / VERIFY NOW**.
+3. Otherwise → **FUTURE WORK**.
+
+The label is always **Priority score (heuristic)**. It is not a probability, expected value, or
 calibrated risk.
 
-**Generic-advice cap.** If the independent judge's `generic` probability is ≥ 0.65, the score is
-capped at **40**. In degraded mode only, the model's `genericRisk ≥ 0.70` applies the same cap and is
-labelled as a self-assessment, not independent. Rationale: 0.65 is clearly above a coin flip and
-0.70 is a conservative self-report floor; 40 is below the 70-point MUST FIX/VERIFY threshold and below
-the 50-point OWNER DECISION threshold, so a generic item cannot outrank a specific, evidenced one.
-The exact values are documented constants and tested.
+## 12. Output
 
-**Independent evidence check.** If the judge's `support` probability is ≤ 0.35, the final evidence
-status becomes **CONFLICTING / INSUFFICIENT** (reason: independent judge did not find support), even
-if local citation checks passed. This is a conservative threshold; the disagreement is shown, not
-hidden.
+At most the top three by final score. The report contains:
 
-**Classification** (code-enforced order):
+- execution mode, OMP version, main model;
+- focus, goals, assumptions, inspected/not-inspected lenses;
+- proposed verification commands in `--verify` mode (not executed);
+- per recommendation: title, classification, evidence status, heuristic score and components,
+  citations and checks, why it matters, verification step, exact next prompt, main-model confidence
+  (self-assessment), independent judge details or **NOT INDEPENDENTLY JUDGED**, remaining uncertainty,
+  and what would change the ranking;
+- a footer pointing to `/genie-run <n>` in the TUI and the heuristic disclaimer.
 
-1. If a valid `ownerDecision` is present and score ≥ 50 → **OWNER DECISION REQUIRED**.
-   Valid means a specific question (8–400 chars) and 2–5 real options. Difficulty alone never
-   qualifies.
-2. Else if score ≥ 70 and impact ≥ 4 → **MUST FIX / VERIFY NOW**.
-3. Else → **FUTURE WORK**.
+The tool also queues the same report as a custom `genie-report` row via `pi.sendMessage(...,
+excludeFromContext: true)`, so the authoritative report is visible even if the model paraphrases.
 
-Evidence status is separate: **VERIFIED**, **UNVERIFIED**, **CONFLICTING / INSUFFICIENT**. An
-UNVERIFIED or CONFLICTING item is always framed as something to verify, never as a confirmed defect.
-Its next prompt is prefixed with the candidate's verification step:
-
-```
-Before changing anything, verify: <verificationStep>
-
-If confirmed: <nextPrompt>
-```
-
-For VERIFIED candidates the exact `nextPrompt` is used as supplied (after sanitisation).
-
-**Confidence** is reported separately: main-model confidence (0–1, self-assessment), independent
-judge answers/probabilities if actually returned, and the final heuristic score. They are never
-multiplied or combined into a "calibrated" number.
-
-## 10. Output
-
-At most the top three by final score. The tool returns Markdown containing:
-
-- Header: focus, goals as understood, assumptions, lenses inspected, lenses not inspected/unavailable.
-- Per recommendation: title, classification, evidence status, heuristic score + component breakdown,
-  citations with path/line and citation status, why it matters, verification step, exact next prompt,
-  main-model confidence (labelled self-assessment), independent judge details and actual backend or
-  **NOT INDEPENDENTLY JUDGED** with reason, remaining uncertainty, and what would change the ranking.
-- A footer reminding the user that `/genie-run <n>` is the only way to run a prompt, and that prompts
-  for unverified findings begin with verification.
-
-The tool also queues the exact report as a custom transcript row:
-`pi.sendMessage({ customType: "genie-report", content: report, display: true, attribution: "agent",
-excludeFromContext: true })` (`docs/extensions.md:383-427`; `types.ts:2231-2234`). This makes the
-authoritative report visible even if the model paraphrases its tool result. The prompt tells the model
-to reply with one short pointer instead of repeating or reformatting the report. The tool result and
-the row are both generated from the same sanitised string.
-
-## 11. Failure handling
+## 13. Failure handling
 
 | Failure | Behaviour |
 | --- | --- |
-| Invalid focus | Notify allowed values; no turn. |
-| `sendUserMessage` rejected | Notify; restore tool set; no partial report. |
-| Model asks a material question | One question, no ranking; user reruns with clarification. |
-| No candidates | Return "No evidence-backed candidates met the bar"; no padding. |
-| Invalid/oversize candidate | Tool error with exact correction; model may retry once. |
-| Citation failed | Downgrade status; do not claim verified; continue. |
-| Judge import/shape/version fail | Degraded; reason "independent judge unavailable in this OMP version". |
-| Judge no credentials/model | Degraded; reason "judge route unavailable". |
-| Judge declines/no UI | Degraded; reason "consent declined" / "no interactive consent". |
-| Judge error/timeout | Degraded; short sanitised reason. |
-| Judge same family as active | Degraded; "judge resolves to the active model family". |
-| Judge partial answers | Degraded; no invented scores. |
-| Custom report row cannot be queued | The tool result still carries the report; no second failure. |
-| `/genie-run` without result | Notify; no action. |
-| User abort | Abort propagation; no report. |
+| Unknown option/focus | Notify; no turn. |
+| Concurrent Genie run | Notify; no second run. |
+| Tool restriction fails or leaves an unexpected tool | Restore snapshot; refuse to start. |
+| `sendUserMessage` rejected | Restore snapshot; notify. |
+| Model asks a material question | One question, no ranking; user reruns. |
+| No candidates | "No evidence-backed candidates met the bar"; no padding. |
+| Invalid/oversize candidate | Tool error with correction; model may retry once. |
+| Citation failed | Downgrade; never claim verified; continue. |
+| Judge import/settings/method/shape fail | Degraded with capability reason. |
+| Judge no credentials/model | Degraded. |
+| Judge declines/no UI | Degraded; nothing sent. |
+| Judge same family as active | Degraded; not independent. |
+| Judge partial/missing answer id | Degraded; no invented scores. |
+| Judge result missing provider/model/API | Degraded; unattributed. |
+| Custom report row fails | Tool result still carries the report. |
+| Restore fails on session transition | Cancel the transition and notify. |
+| User abort | Abort propagation; terminal end restores. |
 
 Degraded reports always say **NOT INDEPENDENTLY JUDGED** and never show invented judge scores,
-backend names, probabilities, usage, or cost.
+backends, probabilities, usage, or cost.
 
-## 12. Privacy and side effects
+## 14. Privacy and side effects
 
-- Extension network calls: only the optional judge request after `/genie` and (if a separate
-  destination) affirmative TUI consent.
-- No telemetry, analytics, background timers, file writes, or persistent recommendation storage.
+- The main provider receives what the main model reads, as in any OMP turn.
+- The judge receives only the sanitised, bounded payload, only after affirmative interactive consent.
+- Redaction is best-effort; it is not comprehensive secret detection.
+- No telemetry, analytics, background timers, persistent recommendation database, or file writes.
 - Local file reads are bounded, read-only, inside `ctx.cwd`, and never logged.
-- The report and judge state are sanitised; the original project files are never modified.
-- In-memory last-result storage contains only titles, classifications, and exact prompts.
+- In-memory last-result storage contains titles, classifications, exact prompts, and proposed commands.
 
-## 13. Installation and compatibility
+## 15. Installation and compatibility
 
-Source/local installation only; no publishing.
+Source/local installation only; no npm publish.
 
-1. One-off: `omp -e <repo>/src/extension.ts`
-2. Local plugin: `omp plugin install <repo-path>` (routes to link); remove with
-   `omp plugin uninstall omp-genie`.
-3. Or copy the package into `<cwd>/.omp/extensions` / `~/.omp/agent/extensions`.
+1. One-off: `omp -e <repo>/src/extension.ts`.
+2. Local plugin: `omp plugin install <repo-path>`; remove with `omp plugin uninstall omp-genie`.
+3. Or copy into `<cwd>/.omp/extensions` / `~/.omp/agent/extensions`.
 
-Compatibility table will be maintained in the README:
+See [`compatibility.md`](./compatibility.md) for tested, expected-unverified, probe-passed,
+untested-with-warning, and capability-failing versions.
 
-| OMP | Core | Judge adapter |
-| --- | --- | --- |
-| 19.2.1 | tested | adapter import/settings/route tested; actual network call unverified |
-| 19.2.x | expected | best-effort, version-gated |
-| <19.2.1 | unsupported | disabled |
-| >=20 | unsupported until revalidated | disabled |
+No Claude Code compatibility claim. OMP can consume Claude plugin content, but extension modules
+import OMP/Pi host packages.
 
-No Claude Code compatibility claim. OMP can consume Claude plugin content, but this is an OMP
-extension module using OMP/Pi host packages.
-
-## 14. Deliberately not built
+## 16. Deliberately not built
 
 No MCP server, vector database, orchestration framework, multi-agent system, Jev integration,
 automatic repository changes, commits/PRs/deployments, background hooks/scheduled analysis,
-persistent recommendation database/cache, separate auth/provider layer, telemetry, or automatic
-follow-up execution.
+persistent recommendation database/cache, separate auth/provider layer, telemetry, automatic
+follow-up execution, or in-extension verification command execution.
 
-## 15. Tests
+## 17. Tests
 
 Deterministic (no model):
-- candidate validation and limits;
+
+- candidate validation and limits, including verification-command shape;
 - citation path/range/quote checks, symlink/escape/deny-list cases;
 - secret pattern redaction and false-positive cases;
 - size limits;
 - scoring formula, evidence strength, generic cap, classification order;
 - evidence-status downgrade and unverified prompt prefix;
 - consent refusal/no-UI/degraded mode using a mocked judge;
+- answer-id validation, attribution rejection, endpoint host sanitisation;
 - backend attribution and partial-answer handling;
-- report sanitisation.
+- static allowlist parsing, fail-closed activation, tool-call blocking, restoration after
+  completion/continue/failure/switch;
+- verification mode never activating an execution tool;
+- report sanitisation and verification-command section.
 
-Host smoke (no model where possible):
+Host/live (opt-in):
+
 - extension loads in `omp` and registers `/genie`, `/genie-run`, `genie_rank`;
-- command rejects unknown focus;
-- judge import capability check on the compiled binary;
-- one opt-in live `/genie` run on a small fixture, with results recorded in `docs/evals.md`.
+- default static-only run with a marker-writing fixture and `--auto-approve`;
+- verification-proposal run with the same fixture;
+- judge capability probe on 19.2.1;
+- owner acceptance script for a real consent-based judge call (not run in this pass);
+- Genie vs plain-prompt fixture suite.
 
 Model-quality evaluation is opt-in. Fixtures and ground truth are separate; the harness must not let
-Genie read the answer key. Metrics and denominators are defined in `docs/evals.md`; no statistical
-significance or calibration claims.
+Genie or the baseline read the answer key. Metrics and denominators are in [`evals.md`](./evals.md);
+no statistical significance or calibration claims.

@@ -1,73 +1,89 @@
 # OMP Genie
 
-User-invoked, evidence-grounded opportunity discovery and prioritisation for [OMP](https://github.com/can1357/oh-my-pi).
+User-invoked, evidence-grounded opportunity discovery and prioritisation for
+[OMP](https://github.com/can1357/oh-my-pi).
 
 Genie reads the project, sweeps nine diagnostic lenses, proposes at most five evidence-backed
 candidates, checks the citations locally, ranks the survivors with a transparent heuristic, and
-returns the top three with an exact next prompt for each. It does not edit files, run a
-recommendation, or call a background service.
+returns the top three with an exact next prompt for each.
+
+Default `/genie` is **static-only at the OMP tool level**: it activates only `read`, `grep`, `glob`,
+and its own ranking tool. It cannot run shell commands, project scripts, tests, builds, package
+managers, git, `gh`, subagents, MCP tools, or other extensions. `/genie --verify` proposes exact
+verification commands for you to run; Genie does not execute them.
 
 Tested against **OMP 19.2.1** on Windows. See [compatibility](#compatibility).
 
 ## 30-second demonstration
 
-Actual headless run on the `docs-drift` fixture. Independent judgement is correctly shown as skipped
-because there is no interactive consent surface in this mode.
+Actual headless run on the public [`jonschlinkert/is-odd`](https://github.com/jonschlinkert/is-odd)
+repository at commit `a80ee0d831a8ee69f1fad5b4673491847975eb26` (MIT), OMP 19.2.1, main model
+`dolphin/deepseek-ai/DeepSeek-V4.1-Flash`, default static-only mode. Command:
+`omp --mode json -p "/genie" --no-session --auto-approve --max-cost 0.20 --max-time 300 -e <repo>/src/extension.ts`
+with that clone as cwd. Actual `tool_execution_start` events: `read` 19, `glob` 1, `genie_rank` 2
+(the first call was a validation retry), no `bash`/`eval`/`task`.
 
 ```text
 > /genie
 
 # OMP Genie — all lenses
 
-**Project goals (as understood):** Widget Service is a minimal Node ESM scaffold ...
-**Inspected lenses:** Correctness, Security, Architecture, Performance, Tests and CI,
-Documentation, Dependencies, Roadmap and intent, Release and operations.
-**Not inspected / unavailable:** Roadmap and intent.
+**Execution mode:** static-only. Genie activated only read, grep, and glob; no shell,
+package manager, or project script was available.
+**OMP version:** 19.2.1.
+**Main model:** dolphin/deepseek-ai/DeepSeek-V4.1-Flash.
+
 **Independent judgement:** NOT INDEPENDENTLY JUDGED — interactive consent is unavailable
 in this host mode.
 
-## 1. Build step is a placeholder: `npm run build` exits 0 with no artifacts
+## 1. is-odd input validation runs after Math.abs coercion, so non-numbers bypass the TypeError contract
 
 **Classification:** MUST FIX / VERIFY NOW
 **Evidence status:** VERIFIED
 **Priority score (heuristic):** 93/100
 
 **Evidence:**
-- `README.md:14-14` — verified quote
-- `package.json:8-8` — verified quote
-- `src/build.js:1-1` — verified quote
+- `index.js:12-16` — verified quote
+- `test.js:28-31` — verified quote
+- `README.md:17-17` — verified quote
 
-**What was observed:** README.md presents `npm run build` as the project's build step.
-package.json wires it to `node src/build.js`, whose entire body is a single console call.
-Executing `npm run build` exits 0, prints "build placeholder", and writes no artifact.
+**What was observed:** index.js computes Math.abs(value) first and only then checks isNumber(n).
+Because Math.abs applies ECMAScript ToNumber, isOdd(true) becomes isOdd(1) and returns true;
+isOdd(false), isOdd(null), isOdd(''), isOdd([]) and isOdd(' ') all become 0 and return false
+without throwing. isOdd('foo') still throws, so behavior is inconsistent across invalid inputs.
 **Exact next prompt:**
-Decide the build contract for widget-service: either delete src/build.js plus the `build`
-script and the README Build section, or implement a real build. Verify `npm run build` either
-no longer exists or produces the documented artifacts.
+In is-odd, verify the input-validation bypass: add negative tests to test.js for true, false,
+null, '', [] and ' ', confirm the current behavior, then fix index.js so only numbers and
+numeric strings are coerced (e.g. gate on typeof value before Math.abs) and update the README
+input contract.
 ```
 
-The full report also ranked the README/start-script mismatch. Every citation in the report was
-checked locally; the exact prompt is copyable. `/genie-run 1` runs it from the interactive TUI, and
-only after the user selects it.
+The run produced three recommendations (one MUST FIX, two FUTURE WORK); the third was correctly
+downgraded to **CONFLICTING / INSUFFICIENT** after a quote did not match its cited range. The full
+verbatim report is in [docs/demo-is-odd.md](docs/demo-is-odd.md).
+
+Independent judging was skipped because headless mode has no interactive consent surface.
+`/genie` did not run the project's `npm test`; the finding is static and the prompt starts with
+verification.
 
 ## Install
 
-No runtime dependencies are installed by Genie. Do not install an unpublished npm package; this
-repository is source-only.
+Genie is source-only. It is not published to npm, and `npm install omp-genie` is not available.
 
 ### Windows (PowerShell)
 
-Shortest verified method, load the extension for one OMP session:
+Clone and try it for one OMP session:
 
 ```powershell
-omp -e C:\Projects\omp-genie\src\extension.ts
+git clone https://github.com/haibt163/omp-genie.git
+cd omp-genie
+omp -e .\src\extension.ts
 ```
 
-Persistent local plugin (uses OMP's local link support; not run against the owner's environment
-during development):
+Install the clone as a persistent local plugin:
 
 ```powershell
-omp plugin install C:\Projects\omp-genie
+omp plugin install $PWD
 omp plugin list
 ```
 
@@ -77,20 +93,20 @@ Remove it cleanly:
 omp plugin uninstall omp-genie
 ```
 
-If you copied the repository instead, use its actual path. Restart OMP after installing a plugin.
-
 ### macOS / Linux
 
-One session:
+Clone and try it for one OMP session:
 
 ```sh
-omp -e "$HOME/src/omp-genie/src/extension.ts"
+git clone https://github.com/haibt163/omp-genie.git
+cd omp-genie
+omp -e ./src/extension.ts
 ```
 
-Persistent local plugin:
+Install the clone as a persistent local plugin:
 
 ```sh
-omp plugin install "$HOME/src/omp-genie"
+omp plugin install "$PWD"
 omp plugin list
 ```
 
@@ -100,125 +116,175 @@ Remove:
 omp plugin uninstall omp-genie
 ```
 
-The one-off `-e` path is the method verified on the development host. `omp plugin install <local
-path>` is documented by OMP 19.2.1 as a local link; it was not installed into the owner's OMP
-environment.
+`omp -e <path>` is the method exercised during development. `omp plugin install <local path>` is
+OMP's local-link install path; it was not installed into the owner's OMP environment during this
+hardening pass. Restart OMP after installing a plugin.
 
 ## Usage
 
 ```text
-/genie                 # all lenses
-/genie security        # focus: architecture, security, performance, roadmap, tests, dependencies
-/genie-run 1           # run the exact prompt for recommendation 1 (interactive TUI only)
+/genie                    # all lenses, static-only
+/genie security           # focus: architecture, security, performance, roadmap, tests, dependencies
+/genie --verify           # static analysis plus exact proposed verification commands (not run)
+/genie --verify security  # both
+/genie-run 1              # run the exact next prompt for recommendation 1 (interactive TUI only)
 ```
 
-`/genie` starts one normal tool-capable OMP turn. The main model reads the project, records every
-lens as `finding`, `no_finding`, `not_inspected`, or `not_applicable`, and calls `genie_rank` once.
-The tool validates the input, checks file citations (path, line range, exact quote), sanitises the
-judge payload, optionally requests independent judgement after explicit consent, computes the score
-and classification in code, and returns the report.
+`/genie` snapshots your active tools, replaces them with the static allowlist plus `genie_rank`,
+verifies the host applied the restriction, and only then starts one normal OMP turn. If OMP keeps an
+execution-capable tool active, Genie restores your tools and refuses to start. After completion,
+cancel, failure, session clear, or session change, it restores the exact original set.
+
+The main model reads the project, records every lens as `finding`, `no_finding`, `not_inspected`, or
+`not_applicable`, and calls `genie_rank` once. The tool validates the input, checks file citations
+(path, line range, exact quote), sanitises the judge payload, optionally requests independent
+judgement after explicit consent, computes the score and classification in code, and returns the
+report.
 
 If the project-goal summary is wrong, reply with the correction and run `/genie` again. If a material
 ambiguity exists, Genie asks one focused question and stops instead of ranking on a guess.
 
+Static-only has a real evidence cost: git history, issue/PR metadata, tests, builds, and runtime
+behaviour are unavailable. Genie marks those lenses `not_inspected` and frames dependent findings as
+UNVERIFIED. It does not pretend to have run them.
+
 If the project is clean, Genie returns fewer than three recommendations or none. It does not pad with
 generic advice.
 
+## What Genie does and does not do
+
+It finds project-specific next steps with checked citations, a heuristic ranking, and copy-ready
+prompts. It is not a code reviewer, task runner, autonomous coding agent, Jev wrapper, MCP server, or a
+replacement for OMP's tools.
+
+The extension never edits project files, commits, pushes, opens PRs, installs packages, or runs a
+recommendation automatically. `/genie-run` is an explicit TUI command that sends the selected exact
+prompt through OMP under your normal tools and approval policy; it is not Genie executing the
+recommendation. There are no background hooks, scheduled analysis, vector databases, multi-agent
+orchestration, or persistent recommendation caches.
+
 ## Privacy
 
-- The extension itself makes **no network request** except the optional independent-judge call.
-- The judge call happens only after an affirmative `ctx.ui.confirm` in the interactive TUI. Headless,
-  RPC, ACP, and no-UI sessions always return **NOT INDEPENDENTLY JUDGED** and send nothing.
-- The judge receives a bounded, sanitised payload: project goals, lens results, and candidate
-  evidence (paths, line ranges, short quotes). It does **not** receive the conversation, full files,
-  images, or the exact next prompts.
-- Evidence is capped at **16 KiB** after sanitisation. Oversize input is rejected, not silently
-  truncated.
-- Before sending, Genie redacts common credential shapes, connection-URL passwords, and
+- **Main provider:** file contents and tool results the main model reads go to your configured main
+  provider as in any ordinary OMP turn. Genie does not add a second copy.
+- **Judge:** the independent judge gets only a sanitised, bounded payload: project goals, lens results,
+  and candidate evidence (paths, line ranges, short quotes). It does not get the conversation, full
+  files, images, or exact next prompts. The cap is **16 KiB** after sanitisation; oversize input is
+  rejected, not silently truncated.
+- **Consent:** the judge call happens only after an affirmative `ctx.ui.confirm` in the interactive
+  TUI. Headless, RPC, ACP, and no-UI sessions send nothing and report **NOT INDEPENDENTLY JUDGED**.
+  The dialog shows the primary provider/model/API and sanitised endpoint host, configured fallback
+  candidates where enumerable (otherwise the exact OMP route source), evidence categories, and size.
+- **Redaction:** before sending, Genie redacts common credential shapes, connection-URL passwords, and
   password/token assignments; it denies `.env*`, private keys, credential stores, `.git`,
   `node_modules`, and build output. **This is best-effort, not comprehensive secret detection.** False
-  positives and false negatives are possible. Do not treat it as a guarantee.
-- No telemetry, analytics, background timers, persistent recommendation database, or file writes.
+  positives and negatives are possible. Do not treat it as a guarantee.
+- **No telemetry, analytics, background timers, persistent recommendation database, or file writes.**
 - The only in-memory state is the last top-three report for `/genie-run`, keyed by session and cleared
-  on switch/shutdown.
+  on switch/clear/shutdown.
 
 See [SECURITY.md](SECURITY.md) and [docs/architecture.md](docs/architecture.md).
 
-## What Genie does not do
+## How is this different?
 
-It is not a code reviewer, task runner, autonomous coding agent, Jev wrapper, MCP server, or a
-replacement for OMP's tools. The extension never edits project files, commits, pushes, opens PRs,
-installs packages, or runs a recommendation automatically. The Genie prompt also instructs the main
-model to stay read-only. There are no background hooks, scheduled analysis, vector databases,
-multi-agent orchestration, or persistent recommendation caches.
+| Project | What it does | Difference from Genie |
+| --- | --- | --- |
+| [Blindspot Audit](https://github.com/MJL-ren/blindspot-audit) | Portable agent skill: profiles a project, sweeps lenses, reports ranked findings, keeps a ledger | Closest broad overlap. No OMP-native command, code-checked citations, exact next prompt/pick-to-run, or consent-gated judge; uses a persistent ledger Genie deliberately excludes. |
+| [Next Prompt](https://github.com/gamaraan/next-prompt-extension) | OMP/Pi extension that suggests one next prompt from the recent conversation | Conversation-local follow-up. No project-wide sweep, diagnostic lenses, evidence citations, ranking, or judge. |
+| [Jev Tools](https://github.com/NomenAK/jev-tools) / [OMP Jev Tools](https://github.com/gnoviawan/omp-jev-tools) | Judgment/evidence primitives exposed as tools | Complementary primitives. No project opportunity discovery, lens sweep, top-three ranking, or exact next prompt. |
+| OMP Genie | OMP-native static-only discovery, code-checked citations, transparent heuristic, exact prompts, optional consent-gated judge | The bundle above; scores are heuristic, not calibrated. |
 
-## Limitations and degraded mode
+These comparisons are from the public project descriptions and Phase 0 source/metadata inspection in
+[docs/verification.md](docs/verification.md) §2. No claim is made that Genie is better for every user;
+if a reusable prompt or a judgment primitive is all you need, those projects may be sufficient.
 
-- **Independent judgement is version-gated and internal.** OMP's `./judgment` export is not a
-  documented public extension contract. Genie isolates it in `src/judge.ts`, requires OMP `19.2.x`,
-  and degrades with a visible reason if the import, settings, judge route, credentials, or answers are
-  unavailable. The compiled-host adapter was verified on 19.2.1; an actual network judgement call was
-  not made without consent. The interface is not guaranteed across OMP versions.
-- **Judge usage is not in OMP's session ledger.** The report shows the usage returned by the judge and
-  says it is not included in session cost totals.
-- **No independent judge** (headless, no UI, no credentials, same model family, declined consent,
-  error, partial answers) → the report says **NOT INDEPENDENTLY JUDGED** and does not invent scores,
-  backends, or probabilities.
-- **Heuristic scores are not probabilities or calibrated risk.** They are a transparent ranking aid.
-- **Citations can be wrong.** A verified quote proves the cited lines exist; it does not prove the
-  interpretation or that the finding matters. Unverified findings are framed as things to verify.
-- **`/genie-run` is TUI-only** and requires a prior report in the same session. Headless users copy
-  the prompt.
-- **Evaluation is not calibration.** The opt-in fixture suite is small, single-run, and measured with
-  term matching; it cannot establish statistical significance.
-- **Platform testing** Local development ran on Windows. The first remote CI run on commit `7882b64`
-  passed all three jobs (`ubuntu-latest`, `macos-latest`, `windows-latest`), each with 41 tests and 0
-  failures. The Windows runner could create symlinks, so its suite ran 41 tests; the local Windows run
-  skipped the symlink-creation test. Full extension runtime on macOS/Linux has not been exercised.
+## Judge role and limits
+
+- The main model supplies impact, alignment, and feasibility (75% of the score). Code computes
+  evidence strength (25%), the weighted total, and the classification.
+- The judge is a **secondary check**: it can cap generic advice and downgrade evidence support. Its own
+  impact rating is advisory/display-only and is not used in the total.
+- The judge adapter uses an internal OMP export. It is allowed only when runtime capability checks
+  pass: import, `resolveJudge`, settings, judge resolution, required methods, primary model,
+  question/answer shape, and a different model family. Any failure → **NOT INDEPENDENTLY JUDGED**.
+- 19.2.1 is the tested version. On another version the same checks apply, but the dialog and report say
+  **UNTESTED OMP VERSION**.
+- Judge usage is reported when the backend returns it; it is not included in OMP's session cost totals.
+- A real consent-based judge call was **not** observed during this hardening pass. The capability probe
+  passed on 19.2.1; the network path remains UNVERIFIED. The owner acceptance script is
+  [`scripts/judge-acceptance.ps1`](scripts/judge-acceptance.ps1):
+
+  ```powershell
+  powershell -ExecutionPolicy Bypass -File .\scripts\judge-acceptance.ps1
+  ```
+
+  It copies a disposable fixture, launches the real TUI, asks you to run `/genie` and decide the
+  consent dialog, then records the actual judge provider/model/API, answer-id validation, and usage
+  outside tracked docs. It never calls the judge for you.
 
 ## Compatibility
 
-| OMP | Core extension | Independent judge |
-| --- | --- | --- |
-| 19.2.1 | Tested | Adapter capability tested; actual network call unverified |
-| 19.2.x | Expected | Version-gated, best-effort |
-| < 19.2.1 | Unsupported | Disabled |
-| >= 20 | Unsupported until revalidated | Disabled |
+No range is labelled tested because one release passed.
+
+| OMP version | Core extension | Judge capability probe | Judge network | Classification |
+| --- | --- | --- | --- | --- |
+| 19.2.1 | Tested: deterministic + live static | Passed 2026-11-27 | UNVERIFIED (no consent-based live call observed) | **Tested / probe passed** |
+| 19.2.2–19.2.x | Expected, not run | Not run | Allowed only if probe passes | **Expected-unverified** |
+| 19.3–19.x | Untested, warning | Not run | Allowed only if probe passes; **UNTESTED OMP VERSION** | **Untested-with-warning** |
+| < 19.2.1 | Unsupported | Not run | Disabled if probe fails | **Capability-failing (expected)** |
+| >= 20 | Untested, warning; peer range excludes npm install | Not run | Source `-e` only; allowed only if probe passes; **UNTESTED OMP VERSION** | **Untested-with-warning (source only)** |
+| Any version where import, `resolveJudge`, settings, methods, primary model, or answer-shape checks fail | Core report still works | Fails | **NOT INDEPENDENTLY JUDGED** | **Capability-failing** |
+
+`npm run check` passing is not proof that the full extension runtime works on each OS. The remote CI
+matrix runs the deterministic suite on Windows, macOS, and Linux; full runtime was exercised on
+Windows only. See [docs/compatibility.md](docs/compatibility.md).
 
 OMP can consume Claude plugin content, but this is an OMP extension module that imports OMP/Pi host
 packages. It is not a Claude Code extension and makes no Claude compatibility claim.
+
+## Limitations
+
+- **Static-only by default.** No git, `gh`, shell, tests, builds, or runtime checks. This prevents
+  project code execution but loses evidence. Verification mode proposes commands; it does not run them.
+- **Heuristic scores are not probabilities or calibrated risk.** They are a transparent ranking aid.
+- **Citations can be wrong.** A verified quote proves the cited lines exist; it does not prove the
+  interpretation or that the finding matters. Unverified findings are framed as things to verify.
+- **No independent judge** (headless, no UI, no credentials, same model family, declined consent,
+  capability failure, missing answer id, missing attribution, error) → **NOT INDEPENDENTLY JUDGED**;
+  no invented scores, backends, or probabilities.
+- **Judge impact is advisory.** It is displayed but does not affect the score.
+- **`/genie-run` is TUI-only** and requires a prior report in the same session. Headless users copy
+  the prompt.
+- **Evaluation is not calibration.** The fixture suite is small, single-run, and measured with term
+  matching; it cannot establish statistical significance. See [docs/evals.md](docs/evals.md).
+- **Platform testing.** Deterministic CI runs on Windows, macOS, and Linux. Full extension runtime was
+  exercised on Windows only.
 
 ## Development
 
 Requires Node.js 22+ for tests (`--experimental-strip-types`) and Bun 1.4.4+ for OMP itself.
 
 ```sh
-npm install
+npm ci
 npm run check          # typecheck + deterministic tests
 ```
 
-The opt-in fixture suite is documented in [docs/evals.md](docs/evals.md). The latest single-run
-headless evaluation (DeepSeek V4.1 Flash) hit the seeded issue in 8/8 seeded fixtures, produced 0/24
-generic-titled recommendations, and produced 0 MUST FIX/OWNER recommendations on the corrected clean
-control. The original control had two real contract gaps, which were fixed before the control was
-rerun; both runs are recorded in `docs/evals.md`. These are tiny synthetic fixtures and one run per
-fixture; the numbers are not accuracy or calibration.
-
-Model-backed evaluation is opt-in:
+Opt-in live checks (model-backed; not CI):
 
 ```sh
-GENIE_LIVE_EVAL=1 npm run eval:live
-# or one fixture:
-GENIE_LIVE_EVAL=1 GENIE_EVAL_FILTER=docs-drift npm run eval:live
+GENIE_SAFETY_EVAL=1 npm run safety:live   # marker fixture, default vs --verify, no execution
+GENIE_LIVE_EVAL=1 npm run eval:live       # Genie vs plain-prompt baseline
 ```
 
-On PowerShell, set `$env:GENIE_LIVE_EVAL = "1"` first. Live runs use `omp --auto-approve` on
-disposable temp copies, keep output outside the fixture, and are not part of CI. Results are recorded
-in [docs/evals.md](docs/evals.md).
+PowerShell: set `$env:GENIE_SAFETY_EVAL = "1"` or `$env:GENIE_LIVE_EVAL = "1"` first. Live runs use
+`omp --auto-approve` on disposable temp copies, keep output outside the fixture, and are not part of
+CI. The safety check proves the extension's tool restriction, not that a model is obedient.
 
-- [docs/verification.md](docs/verification.md) — Phase 0 evidence and stop-condition review
-- [docs/architecture.md](docs/architecture.md) — flow, APIs, privacy, scoring, failure handling
-- [docs/evals.md](docs/evals.md) — fixture suite and actual results
+- [docs/architecture.md](docs/architecture.md) — flow, APIs, execution safety, privacy, scoring,
+  failure handling
+- [docs/compatibility.md](docs/compatibility.md) — tested/probe/untested/capability-failing record
+- [docs/verification.md](docs/verification.md) — historical Phase 0 plus hardening update
+- [docs/evals.md](docs/evals.md) — fixture suite and actual Genie-vs-baseline results
 - [CONTRIBUTING.md](CONTRIBUTING.md) — contribution rules
 
 ## Licence

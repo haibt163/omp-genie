@@ -24,7 +24,7 @@ remote backend answers. Only an observed consent-based call can make the judge n
 | 19.2.2–19.2.x | Expected, not run | Not run | Allowed only if probe passes | Expected-unverified |
 | 19.3–19.x | Untested, warning | Not run | Allowed only if probe passes; dialog/report say **UNTESTED OMP VERSION** | Untested-with-warning |
 | < 19.2.1 | Unsupported | Not run | Disabled if probe fails | Capability-failing (expected) |
-| >= 20 | Untested, warning | Not run | Allowed only if probe passes; dialog/report say **UNTESTED OMP VERSION** | Untested-with-warning |
+| >= 20 | Untested, warning; peer range excludes npm install | Not run | Source `-e` only; allowed only if probe passes; dialog/report say **UNTESTED OMP VERSION** | Untested-with-warning (source only) |
 | Any version where import, `resolveJudge`, settings, judge resolution, required methods, primary model, or adapter-shape checks fail | Core report still works | Fails | **NOT INDEPENDENTLY JUDGED** | Capability-failing |
 
 No range is labelled tested because one release passed. The tested claim is 19.2.1 only.
