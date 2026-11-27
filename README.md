@@ -171,9 +171,10 @@ multi-agent orchestration, or persistent recommendation caches.
   the prompt.
 - **Evaluation is not calibration.** The opt-in fixture suite is small, single-run, and measured with
   term matching; it cannot establish statistical significance.
-- **Platform testing** was performed on Windows only. The CI workflow is configured for Windows,
-  macOS, and Linux, but it has not been run on a remote runner; a workflow file is not proof that the
-  extension has been run on those platforms.
+- **Platform testing** Local development ran on Windows. The first remote CI run on commit `7882b64`
+  passed all three jobs (`ubuntu-latest`, `macos-latest`, `windows-latest`), each with 41 tests and 0
+  failures. The Windows runner could create symlinks, so its suite ran 41 tests; the local Windows run
+  skipped the symlink-creation test. Full extension runtime on macOS/Linux has not been exercised.
 
 ## Compatibility
 

@@ -342,7 +342,7 @@ The adapter must catch these errors, withhold judge scores, and label the result
 | Plugin manifest | `package.json#omp.extensions` (or legacy `pi.extensions`) | VERIFIED (`docs/extension-loading.md:55-59`) |
 | Removal | `omp plugin uninstall <name>`; or remove the file/symlink from the extensions directory | VERIFIED (`docs/plugin-manager-installer-plumbing.md:131-140`) |
 | npm distribution | Supported by OMP in general, but this package is not published; do not present it as installable from npm | VERIFIED |
-| Windows/macOS/Linux | OMP runs on the development Windows host; install paths are OS paths. Cross-platform runtime behavior is UNVERIFIED until CI and a real run on each platform. | PARTIAL |
+| Windows/macOS/Linux | Local development ran on Windows. Remote CI on `7882b64` passed the deterministic suite on `ubuntu-latest`, `macos-latest`, and `windows-latest`. Full extension runtime on macOS/Linux was not exercised. | PARTIAL |
 | Claude Code compatibility | OMP can consume Claude plugin *content* (skills/commands/etc.) through its marketplaces, but extension modules import OMP/Pi host packages and are not Claude Code extensions. Do not claim Claude Code compatibility. | VERIFIED (`docs/marketplace.md:3`, `docs/extensions.md:17-38`) |
 
 **Install design:** source/local plugin only. README will document:
@@ -480,6 +480,7 @@ verification document stays honest.
 | Live `/genie` turn | `omp --mode json -p "/genie"` on a copied fixture, headless | Completed; full report in final assistant message; 2–3 recommendations; `genie_rank` called | VERIFIED |
 | Headless degraded mode | same live run | Report says **NOT INDEPENDENTLY JUDGED — interactive consent is unavailable** | VERIFIED |
 | Full live fixture suite | `scripts/eval-live.ts` | Results recorded in `docs/evals.md` and `evals/.runs/` (local) | See `docs/evals.md` |
+| First remote CI run | GitHub Actions run `45961924163` on `7882b64` | `ubuntu-latest`, `macos-latest`, `windows-latest` all passed; 41 tests each, 0 failures | VERIFIED |
 
 The live run also showed that the main model can execute read-only verification commands (`npm run
 start`, `npm run build`, a port check) during the Genie turn. The extension itself did not modify the
