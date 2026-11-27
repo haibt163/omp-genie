@@ -3,10 +3,13 @@
 You are running a user-invoked Genie pass for this project. Focus: **{{FOCUS}}**.
 
 Your job is to find what deserves attention next across the whole project, not to review a diff, run
-a task, or repeat generic best practice. Work only from evidence you inspect in this turn. Do not
-modify files, install packages, commit, push, open issues, or start background/network work. Read-only
-`git` commands are allowed. Read-only `gh issue list` / `gh pr list` is allowed only if `gh` is already
-installed and authenticated; otherwise record issue information as unavailable.
+a task, or repeat generic best practice. Work only from evidence you inspect in this turn.
+
+This run is **static-only** (mode: `{{MODE}}`). The only project tools available are `read`, `grep`,
+and `glob`, plus `genie_rank`. Do not attempt shell commands, `git`, `gh`, package managers, builds,
+tests, servers, debuggers, subagents, MCP tools, or network calls. If a conclusion depends on running
+something, record it as `not_inspected` or **UNVERIFIED** and propose a verification step. Do not
+claim that git history, issue metadata, tests, or a build was inspected unless it was.
 
 ## 1. Understand the project first
 
@@ -14,8 +17,9 @@ Read, as applicable:
 
 - `README*`, project docs, roadmap, changelog, `AGENTS.md` / `CLAUDE.md`;
 - package manifests and workspace configuration;
-- `git status --short` and the recent `git log --oneline`;
-- accessible issue/PR metadata, if available without setup.
+- files that describe the intended release or test process.
+- Git history and issue/PR metadata are **unavailable** in static-only mode. Do not infer them from
+  filenames or claim them as evidence. If they matter, mark the lens `not_inspected` and say why.
 
 Write a three-line summary of what the project appears to be trying to achieve. Distinguish what you
 actually inspected from what was unavailable. If one ambiguity would materially change the
@@ -80,7 +84,10 @@ Use these exact JSON keys:
   `dependencies`, `roadmap_intent`, `release_operations`;
 - lens status: `finding`, `no_finding`, `not_inspected`, `not_applicable`;
 - evidence kind: `file`, `git`, `issue`, `other`;
-- evidence status: `VERIFIED`, `UNVERIFIED`, `CONFLICTING_INSUFFICIENT`.
+- evidence status: `VERIFIED`, `UNVERIFIED`, `CONFLICTING_INSUFFICIENT`;
+- `verificationCommands` (only when the mode instruction asks for it): at most three
+  `{ "command": string, "purpose": string }` objects. Each command must be a single line. These are
+  proposals for the user to run; Genie does not execute them.
 
 Use the focus value exactly as supplied: `{{FOCUS}}`.
 
@@ -92,4 +99,5 @@ else. If the tool returns a validation error, correct only the named fields and 
 returns no candidates, say so plainly; do not invent work.
 
 The report is heuristic and evidence-scoped. It is not a probability, a calibrated risk estimate, or
-proof that an unverified issue exists.
+proof that an unverified issue exists. A proposed verification command is not evidence that the
+finding is real.

@@ -7,20 +7,30 @@ import {
 	buildJudgeQuestions,
 	buildJudgeState,
 	describeJudgeFailure,
+	endpointHost,
+	expectedAnswerIds,
 	interpretJudgeResult,
-	isSupportedJudgeVersion,
+	isTestedJudgeVersion,
+	missingJudgeAnswerIds,
 } from "../src/judge.ts";
 import { evaluateCandidate } from "../src/scoring.ts";
 import type { EvidenceSummary } from "../src/types.ts";
 
 const emptySummary: EvidenceSummary = { quoteCount: 1, rangeCount: 0, failedCount: 0, checks: [] };
 
-test("gates the judge to the tested OMP minor", () => {
-	assert.equal(isSupportedJudgeVersion("19.2.1"), true);
-	assert.equal(isSupportedJudgeVersion("19.2.9"), true);
-	assert.equal(isSupportedJudgeVersion("19.3.0"), false);
-	assert.equal(isSupportedJudgeVersion("20.0.0"), false);
-	assert.equal(isSupportedJudgeVersion("omp/19.2.1"), false);
+test("records the tested OMP version without gating on the minor", () => {
+	assert.equal(isTestedJudgeVersion("19.2.1"), true);
+	assert.equal(isTestedJudgeVersion("19.2.9"), false);
+	assert.equal(isTestedJudgeVersion("19.3.0"), false);
+	assert.equal(isTestedJudgeVersion("20.0.0"), false);
+	assert.equal(isTestedJudgeVersion("omp/19.2.1"), false);
+});
+
+test("sanitises endpoint disclosure to a host without credentials or path", () => {
+	assert.equal(endpointHost("https://user:secret@api.example.test/v1?key=abc"), "api.example.test");
+	assert.equal(endpointHost("http://127.0.0.1:8080/v1"), "127.0.0.1:8080");
+	assert.equal(endpointHost("file:///etc/passwd"), undefined);
+	assert.equal(endpointHost("not a url"), undefined);
 });
 
 test("builds three typed questions per candidate", () => {
@@ -87,6 +97,20 @@ test("interprets complete answers and usage", () => {
 	assert.equal(outcome.kind, "native");
 	assert.equal(outcome.byCandidate?.[0]?.generic, 0.2);
 	assert.equal(outcome.usage?.total, 12);
+	assert.deepEqual(outcome.answerIds, ["c1_generic", "c1_support", "c1_impact"]);
+	assert.equal(outcome.validation, "all_answer_ids_present");
+});
+
+test("identifies every missing answer id", () => {
+	const input = baseInput({ candidates: [baseCandidate({ id: "c1" })] });
+	assert.deepEqual(expectedAnswerIds(input), ["c1_generic", "c1_support", "c1_impact"]);
+	const answers = fakeJudgeAnswers(["c1"]);
+	delete answers.c1_support;
+	assert.deepEqual(missingJudgeAnswerIds(answers, input), ["c1_support"]);
+	assert.throws(
+		() => interpretJudgeResult({ api: "x", provider: "x", model: "x", answers }, input, "native"),
+		/incomplete_judgment: missing c1_support/u,
+	);
 });
 
 test("rejects incomplete judgement answers instead of inventing scores", () => {
@@ -103,5 +127,19 @@ test("rejects incomplete judgement answers instead of inventing scores", () => {
 	assert.match(describeJudgeFailure(new Error("incomplete_judgment")), /incomplete/u);
 	assert.match(describeJudgeFailure(new Error("judgment: no judge model available")), /no judge model/u);
 	assert.match(describeJudgeFailure(new Error("judgment: every judge candidate failed: x")), /every judge/u);
+	assert.match(describeJudgeFailure(new Error("unattributed_judgment")), /did not identify/u);
 	assert.equal(describeJudgeFailure(new Error("https://secret.example/?key=abc")), "independent judge request failed");
+});
+
+test("rejects a result that does not identify its provider, model, and API", () => {
+	const input = baseInput({ candidates: [baseCandidate({ id: "c1" })] });
+	assert.throws(
+		() =>
+			interpretJudgeResult(
+				{ provider: "p", model: "m", answers: fakeJudgeAnswers(["c1"]) },
+				input,
+				"native",
+			),
+		/unattributed_judgment/u,
+	);
 });

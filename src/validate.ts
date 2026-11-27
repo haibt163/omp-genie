@@ -12,6 +12,7 @@ import {
 	type LensReport,
 	type LensStatus,
 	type OwnerDecisionInput,
+	type VerificationCommandInput,
 } from "./types.ts";
 import { isRecord } from "./guards.ts";
 
@@ -32,6 +33,9 @@ export const LIMITS = {
 	evidenceNote: 300,
 	ownerQuestion: 400,
 	ownerOption: 120,
+	verificationCommands: 3,
+	verificationCommand: 500,
+	verificationPurpose: 200,
 } as const;
 
 export type ValidationResult =
@@ -294,6 +298,47 @@ function readCandidate(reader: Reader, raw: unknown, index: number): CandidateIn
 	};
 }
 
+function readVerificationCommands(
+	reader: Reader,
+	raw: unknown,
+): VerificationCommandInput[] | undefined {
+	if (raw === undefined || raw === null) return undefined;
+	if (!Array.isArray(raw)) {
+		reader.fail("verificationCommands", "must be an array (0 to 3 items)");
+		return undefined;
+	}
+	if (raw.length > LIMITS.verificationCommands) {
+		reader.fail("verificationCommands", `must contain at most ${LIMITS.verificationCommands} items`);
+	}
+	const commands: VerificationCommandInput[] = [];
+	for (let index = 0; index < raw.length; index += 1) {
+		const path = `verificationCommands[${index}]`;
+		const item = raw[index];
+		if (!isRecord(item)) {
+			reader.fail(path, "must be an object");
+			continue;
+		}
+		const command = reader.string(
+			item.command,
+			`${path}.command`,
+			1,
+			LIMITS.verificationCommand,
+		);
+		const purpose = reader.string(
+			item.purpose,
+			`${path}.purpose`,
+			1,
+			LIMITS.verificationPurpose,
+		);
+		if (command !== undefined && /[\r\n\u0000]/u.test(command)) {
+			reader.fail(`${path}.command`, "must be a single line with no NUL characters");
+			continue;
+		}
+		if (command !== undefined && purpose !== undefined) commands.push({ command, purpose });
+	}
+	return commands;
+}
+
 function readLenses(reader: Reader, raw: unknown): LensReport[] {
 	if (!Array.isArray(raw)) {
 		reader.fail("lenses", "must be an array with all nine lenses");
@@ -356,6 +401,7 @@ export function parseGenieInput(raw: unknown): ValidationResult {
 		reader.fail("focus", `must be all or one of: ${FOCUS_AREAS.join(", ")}`);
 	}
 	const lenses = readLenses(reader, raw.lenses);
+	const verificationCommands = readVerificationCommands(reader, raw.verificationCommands);
 	const candidatesRaw = raw.candidates;
 	const candidates: CandidateInput[] = [];
 	if (!Array.isArray(candidatesRaw)) {
@@ -376,6 +422,13 @@ export function parseGenieInput(raw: unknown): ValidationResult {
 	}
 	return {
 		ok: true,
-		value: { projectGoals, focus, assumptions, lenses, candidates },
+		value: {
+			projectGoals,
+			focus,
+			assumptions,
+			lenses,
+			candidates,
+			...(verificationCommands === undefined ? {} : { verificationCommands }),
+		},
 	};
 }

@@ -1,25 +1,40 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { VERSION, type ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
-import { FOCUS_AREAS, type Focus, type StoredReport } from "./types.ts";
+import type {
+	ExtensionAPI,
+	ExtensionCommandContext,
+	ExtensionContext,
+} from "@oh-my-pi/pi-coding-agent";
+import { FOCUS_AREAS, type StoredReport } from "./types.ts";
 import { sanitizeText } from "./sanitize.ts";
 import { rankCandidates } from "./tool.ts";
+import {
+	GENIE_TOOL,
+	HOST_SPECIAL_TOOLS,
+	activeToolsForMode,
+	isStaticTool,
+	parseGenieArgs,
+	unexpectedActiveTools,
+	type GenieMode,
+} from "./safety.ts";
 
 interface ActiveRun {
-	wasActive: boolean;
+	sessionId: string;
+	snapshot: string[];
+	mode: GenieMode;
 }
 
-function parseFocus(args: string): Focus | undefined {
-	const text = args.trim().toLowerCase();
-	if (text === "" || text === "all") return "all";
-	return (FOCUS_AREAS as readonly string[]).includes(text) ? (text as Focus) : undefined;
-}
-
-function loadPrompt(focus: Focus): string {
+function loadPrompt(focus: string, mode: GenieMode): string {
 	const promptDir = new URL("../prompts/", import.meta.url);
 	const genie = readFileSync(fileURLToPath(new URL("genie.md", promptDir)), "utf8");
 	const rubric = readFileSync(fileURLToPath(new URL("rubric.md", promptDir)), "utf8");
-	return `${genie}\n\n---\n\n${rubric}`.replaceAll("{{FOCUS}}", focus);
+	const modeInstruction =
+		mode === "verify"
+			? "Propose up to three exact verification commands in `verificationCommands`. They are listed in the report and are not executed by Genie."
+			: "Do not propose verification commands in this mode; the report is a static-analysis result.";
+	return `${genie}\n\n${modeInstruction}\n\n---\n\n${rubric}`
+		.replaceAll("{{FOCUS}}", focus)
+		.replaceAll("{{MODE}}", mode === "verify" ? "verification proposal" : "static-only");
 }
 
 function errorText(error: unknown): string {
@@ -31,6 +46,24 @@ export default function genieExtension(pi: ExtensionAPI): void {
 	const z = pi.zod;
 	const lastBySession = new Map<string, StoredReport>();
 	const activeRuns = new Map<string, ActiveRun>();
+
+	const restoreTools = async (snapshot: readonly string[]): Promise<boolean> => {
+		try {
+			await pi.setActiveTools([...snapshot]);
+			return true;
+		} catch {
+			return false;
+		}
+	};
+
+	const failClosed = async (
+		ctx: ExtensionCommandContext,
+		snapshot: readonly string[],
+		reason: string,
+	): Promise<void> => {
+		await restoreTools(snapshot);
+		ctx.ui.notify(`OMP Genie did not start: ${reason}`, "error");
+	};
 
 	const evidenceSchema = z.object({
 		kind: z.string(),
@@ -65,8 +98,13 @@ export default function genieExtension(pi: ExtensionAPI): void {
 		whatWouldChangeRanking: z.string(),
 	});
 
+	const verificationCommandSchema = z.object({
+		command: z.string(),
+		purpose: z.string(),
+	});
+
 	pi.registerTool({
-		name: "genie_rank",
+		name: GENIE_TOOL,
 		label: "Genie Rank",
 		description:
 			"Validate, score, classify, and optionally independently review Genie candidates. Call exactly once with the project goals, all nine lens results, and 0-5 evidence-backed candidates. Returns the final top-three report and exact next prompts.",
@@ -82,15 +120,21 @@ export default function genieExtension(pi: ExtensionAPI): void {
 				}),
 			),
 			candidates: z.array(candidateSchema),
+			verificationCommands: z.array(verificationCommandSchema).max(3).optional(),
 		}),
 		approval: "read",
 		defaultInactive: true,
 		loadMode: "essential",
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 			try {
-				const result = await rankCandidates(params, ctx, signal, { version: VERSION });
+				const sessionId = ctx.sessionManager.getSessionId();
+				const mode = activeRuns.get(sessionId)?.mode ?? "static";
+				const result = await rankCandidates(params, ctx, signal, {
+					version: pi.pi.VERSION,
+					mode,
+				});
 				if (result.stored !== undefined) {
-					lastBySession.set(ctx.sessionManager.getSessionId(), result.stored);
+					lastBySession.set(sessionId, result.stored);
 				}
 				if (result.ok) {
 					try {
@@ -126,47 +170,61 @@ export default function genieExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand("genie", {
-		description: "Find and rank project opportunities; optional focus: architecture, security, performance, roadmap, tests, dependencies",
+		description:
+			"Static-only project opportunity discovery. Optional --verify proposes exact commands without running them. Focus: architecture, security, performance, roadmap, tests, dependencies",
 		handler: async (args, ctx) => {
 			if (ctx.agent.kind !== "main") {
 				ctx.ui.notify("OMP Genie runs only in the main session.", "warning");
 				return;
 			}
-			const focus = parseFocus(args);
-			if (focus === undefined) {
-				ctx.ui.notify(`Unknown focus. Use one of: ${FOCUS_AREAS.join(", ")}`, "error");
+			const parsed = parseGenieArgs(args);
+			if (!parsed.ok) {
+				ctx.ui.notify(parsed.error, "error");
 				return;
 			}
 			await ctx.waitForIdle();
+			const sessionId = ctx.sessionManager.getSessionId();
+			if (activeRuns.has(sessionId)) {
+				ctx.ui.notify("OMP Genie is already running in this session.", "warning");
+				return;
+			}
 			let prompt: string;
 			try {
-				prompt = loadPrompt(focus);
+				prompt = loadPrompt(parsed.value.focus, parsed.value.mode);
 			} catch {
 				ctx.ui.notify("OMP Genie could not read its prompt files. Reinstall or check the package.", "error");
 				return;
 			}
-			const sessionId = ctx.sessionManager.getSessionId();
-			const wasActive = pi.getActiveTools().includes("genie_rank");
-			if (!wasActive) {
-				try {
-					await pi.setActiveTools([...pi.getActiveTools(), "genie_rank"]);
-				} catch {
-					ctx.ui.notify("OMP Genie could not activate its ranking tool.", "error");
-					return;
-				}
+
+			const snapshot = pi.getActiveTools();
+			const requested = activeToolsForMode(parsed.value.mode);
+			try {
+				await pi.setActiveTools(requested);
+			} catch {
+				await failClosed(ctx, snapshot, "OMP could not restrict the active tools.");
+				return;
 			}
-			activeRuns.set(sessionId, { wasActive });
+			const active = pi.getActiveTools();
+			const unexpected = unexpectedActiveTools(active, parsed.value.mode);
+			if (!active.includes(GENIE_TOOL)) {
+				await failClosed(ctx, snapshot, "the ranking tool is not active after tool restriction.");
+				return;
+			}
+			if (unexpected.length > 0) {
+				await failClosed(
+					ctx,
+					snapshot,
+					`OMP kept execution-capable tools active: ${unexpected.join(", ")}.`,
+				);
+				return;
+			}
+
+			activeRuns.set(sessionId, { sessionId, snapshot, mode: parsed.value.mode });
 			try {
 				await pi.sendUserMessage(prompt, { attribution: "agent" });
 			} catch (error) {
 				activeRuns.delete(sessionId);
-				if (!wasActive) {
-					try {
-						await pi.setActiveTools(pi.getActiveTools().filter(name => name !== "genie_rank"));
-					} catch {
-						// The session may be shutting down.
-					}
-				}
+				await restoreTools(snapshot);
 				ctx.ui.notify(`OMP Genie could not start: ${errorText(error)}`, "error");
 			}
 		},
@@ -221,35 +279,74 @@ export default function genieExtension(pi: ExtensionAPI): void {
 		},
 	});
 
+	pi.on("tool_call", (event, ctx) => {
+		const run = activeRuns.get(ctx.sessionManager.getSessionId());
+		if (run === undefined) return;
+		if (isStaticTool(event.toolName) || event.toolName === GENIE_TOOL || HOST_SPECIAL_TOOLS[event.toolName]) {
+			return;
+		}
+		return {
+			block: true,
+			reason:
+				"OMP Genie is static-only. Shell, eval, debugger, package managers, subagents, MCP, and extension tools are unavailable during a Genie run.",
+		};
+	});
+
 	pi.on("agent_end", async (event, ctx) => {
 		if (event.willContinue || event.awaitingAsyncWork) return;
 		const sessionId = ctx.sessionManager.getSessionId();
 		const run = activeRuns.get(sessionId);
 		if (run === undefined) return;
 		activeRuns.delete(sessionId);
-		if (run.wasActive) return;
-		try {
-			const active = pi.getActiveTools();
-			if (active.includes("genie_rank")) {
-				await pi.setActiveTools(active.filter(name => name !== "genie_rank"));
-			}
-		} catch {
-			// The session may be shutting down; the tool remains inactive next session.
+		if (!(await restoreTools(run.snapshot))) {
+			ctx.ui.notify(
+				"OMP Genie could not restore the previous active tools. Restart the session or set them explicitly.",
+				"warning",
+			);
 		}
 	});
 
-	pi.on("session_shutdown", (_event, ctx) => {
+	const restoreBeforeTransition = async (ctx: ExtensionContext): Promise<boolean> => {
 		const sessionId = ctx.sessionManager.getSessionId();
+		const run = activeRuns.get(sessionId);
+		if (run === undefined) return true;
+		if (!(await restoreTools(run.snapshot))) {
+			ctx.ui.notify("OMP Genie could not restore tools; the session change was cancelled.", "error");
+			return false;
+		}
+		activeRuns.delete(sessionId);
+		return true;
+	};
+
+	pi.on("session_before_switch", async (_event, ctx) => {
+		const restored = await restoreBeforeTransition(ctx);
+		return restored ? undefined : { cancel: true };
+	});
+
+	pi.on("session_before_branch", async (_event, ctx) => {
+		const restored = await restoreBeforeTransition(ctx);
+		return restored ? undefined : { cancel: true };
+	});
+
+	pi.on("session_before_tree", async (_event, ctx) => {
+		const restored = await restoreBeforeTransition(ctx);
+		return restored ? undefined : { cancel: true };
+	});
+
+	pi.on("session_clear", async (_event, ctx) => {
+		await restoreBeforeTransition(ctx);
+		lastBySession.delete(ctx.sessionManager.getSessionId());
+	});
+
+	pi.on("session_shutdown", async (_event, ctx) => {
+		const sessionId = ctx.sessionManager.getSessionId();
+		const run = activeRuns.get(sessionId);
+		if (run !== undefined) await restoreTools(run.snapshot);
 		activeRuns.delete(sessionId);
 		lastBySession.delete(sessionId);
 	});
 
 	pi.on("session_switch", () => {
-		activeRuns.clear();
-		lastBySession.clear();
-	});
-
-	pi.on("session_clear", () => {
 		activeRuns.clear();
 		lastBySession.clear();
 	});
