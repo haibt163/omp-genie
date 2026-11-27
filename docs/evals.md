@@ -7,7 +7,7 @@ or calibration. The deterministic tests in `test/` are the CI gate.
 
 Nine self-contained repositories live under `evals/fixtures/`. The answer key is
 `evals/ground-truth/manifest.json`, outside every fixture cwd. The harness copies only the fixture
-into a fresh temp directory before running Genie, so the answer key is not reachable from the
+into a fresh temp directory before running either arm, so the answer key is not reachable from the
 evaluated project.
 
 | Fixture | Stack | Seeded issue | Expected lens |
@@ -22,126 +22,152 @@ evaluated project.
 | `release-ops` | Node/JS | CI runs `npm test`; package.json has no test script | Tests/CI, release/operations |
 | `clean-control` | Node/JS | No seeded significant issue; README, tests, and CI exist | None |
 
-## Method
+## Two arms
+
+Both arms use the same fixtures, the same model, the same read-only tool set, the same per-run cost
+and time caps, and no access to the answer key.
+
+| Arm | Prompt | Tools | Output |
+| --- | --- | --- | --- |
+| Genie | `/genie` | `read`, `grep`, `glob`, `genie_rank` | Normal Genie report with classifications, evidence status, heuristic score |
+| Baseline | `Review this project and recommend the three most valuable next steps.` | `read`, `grep`, `glob` | Plain assistant answer; no lenses, no ranking tool, no rubric |
+
+Commands (per fixture, disposable temp copy as cwd):
 
 ```sh
-GENIE_LIVE_EVAL=1 npm run eval:live
-GENIE_LIVE_EVAL=1 GENIE_EVAL_FILTER=docs-drift npm run eval:live
+# Genie
+omp --mode json -p "/genie" --no-session --auto-approve \
+  --tools read,grep,glob,genie_rank --max-cost 0.20 --max-time 300 \
+  -e <repo>/src/extension.ts
+
+# Baseline
+omp --mode json -p "Review this project and recommend the three most valuable next steps." \
+  --no-session --auto-approve --tools read,grep,glob --max-cost 0.20 --max-time 300
 ```
 
-PowerShell: set `$env:GENIE_LIVE_EVAL = "1"` first.
+`--auto-approve` is used only because the fixture copy is disposable and the tool set contains no
+execution-capable tools. The safety suite separately proves that default Genie does not activate
+`bash`/`eval`/`task` even with `--auto-approve`, and that a marker-writing fixture script is not run.
 
-For each fixture the harness:
+Headless runs intentionally skip independent judgement, so these results measure the main-model
+discovery/ranking path and degraded-mode labelling, not the judge.
 
-1. copies `evals/fixtures/<name>` to a fresh OS temp directory; for `security-token`, it replaces the
-   neutral placeholder in `src/config.ts` with a runtime-built fake Stripe test token so the seeded
-   hardcoded-credential issue is present only in the disposable copy;
-2. runs
-   `omp --mode json -p "/genie" --no-session --auto-approve --max-cost <cap> --max-time <cap> -e <repo>/src/extension.ts`
-   with the temp directory as cwd;
-3. stores raw JSONL, stderr, and the extracted report under `evals/.runs/<timestamp>/` (gitignored);
-4. records the actual assistant model from the event stream;
-5. computes the metrics below.
+## Repetitions and spend
 
-`--auto-approve` is used only because the fixture copy is disposable. The extension itself never
-edits the project. Headless runs intentionally skip independent judgement, so these results measure
-the main-model discovery/ranking path and degraded-mode labelling, not the judge.
+Three repetitions per arm would be 9 fixtures × 2 arms × 3 = 54 runs. At the unchanged $0.20 per-run
+cap that is $10.80, not under the stated $10.80 threshold. Per the rule, this run used **1 repetition
+per fixture per arm = 18 runs**, with the caps unchanged. Actual reported spend is below.
 
-## Metrics and denominators
+## Metric extraction
 
-| Metric | Definition | Denominator |
-| --- | --- | --- |
-| Top-three hit rate | A seeded fixture counts as a hit when any of the first three rendered recommendation sections contains at least one case-insensitive ground-truth term. | Seeded fixtures with an extracted report. |
-| Generic rate | Recommendation titles matching a ground-truth generic phrase (for example "add tests", "best practices"). This is a title heuristic, not a semantic classifier. | All extracted top-three recommendations. |
-| Clean-control false positives | Recommendations in `clean-control` classified `MUST FIX / VERIFY NOW` or `OWNER DECISION REQUIRED`. `FUTURE WORK` is allowed. | The clean-control run. |
-| Unverified presented as fact | A `MUST FIX / VERIFY NOW` section whose evidence status is `UNVERIFIED` or `CONFLICTING / INSUFFICIENT` and whose exact prompt does not contain the required "Before changing anything, verify" prefix. | All extracted top-three recommendations. |
+Both arms are scored from the first three rendered recommendations.
 
-These are coarse, single-run measurements. They do not measure recall outside the seeded issue, model
-calibration, or whether a recommendation is a good idea.
+- **Genie sections:** split on `## 1.` … `## 3.`.
+- **Baseline sections:** join every assistant text message in the run (OMP can split one answer across
+  several messages), then find numbered lines matching `1.`, `2.`, `3.` (with optional Markdown
+  heading/bold markers); take the first sequence starting at 1; stop each section at the next chosen
+  number. If no numbered recommendation sequence exists, the run contributes 0 recommendations and is
+  reported as such.
+- **Top-three hit rate:** a seeded fixture is a hit when any of the first three sections contains at
+  least one case-insensitive ground-truth term. Denominator: seeded runs with an extracted report.
+- **Generic recommendations:** a recommendation title contains a ground-truth generic phrase (for
+  example "add tests", "best practices"). This is a title heuristic, not a semantic classifier.
+  Denominator: all extracted top-three recommendations.
+- **Clean-control high-severity false positives:** for Genie, recommendations classified `MUST FIX /
+  VERIFY NOW` or `OWNER DECISION REQUIRED`. For the baseline, recommendations containing a defect
+  keyword (`vulnerab*`, `security issue/bug/flaw`, `data loss`, `crash*`, `broken`, `incorrect`, `bug`,
+  `fails`, `failure`, `does not work`, `is wrong`). Prescriptive words such as "must" are deliberately
+  not counted: the baseline's clean-control answer uses them for constructive advice. The baseline has
+  no classification field, so this keyword rule is coarser and is labelled as a heuristic.
+  Denominator: the clean-control run.
+- **Unverified claims presented as fact:** for Genie, a `MUST FIX / VERIFY NOW` section whose evidence
+  status is `UNVERIFIED` or `CONFLICTING / INSUFFICIENT` and whose exact prompt lacks the required
+  "Before changing anything, verify" prefix. For the baseline, a defect-keyword section with no
+  file-path or line reference in the section **or anywhere in the report**; baseline answers often put
+  the evidence table before the top-three sections, so counting only the section would overstate this
+  metric. This is a proxy, not proof that a claim is unsupported.
+- **Actual spend:** sum of `usage.cost.total` from assistant `message_end` events in the JSONL.
+- **Model:** the `model` field of the assistant messages; both arms should match.
+- **Cases where Genie adds nothing:** both arms hit the seeded issue and Genie has no fewer generic
+  titles; the list also reports unverified-as-fact counts and cost. The clean control is listed with
+  both arms' recommendation/false-positive counts and cost.
+
+These are coarse, single-run measurements. Term matching can count a passing mention as a hit and can
+miss a correct finding phrased differently. They do not measure recall outside the seeded issue,
+model calibration, whether a recommendation is a good idea, or semantic accuracy.
 
 ## Results
 
-Full suite run: 2026-11-27T07:25:51Z
-Corrected clean-control rerun: 2026-11-27T07:26:55Z
-Model: `deepseek-ai/DeepSeek-V4.1-Flash` (provider `dolphin`)
-Configuration: headless `omp --mode json -p "/genie" --no-session --auto-approve
---max-cost 0.20 --max-time 300 -e src/extension.ts`; independent judgement intentionally skipped
-because there is no interactive consent surface.
+Run: 2026-11-27T08:58:43Z
+OMP: 19.2.1
+Model: `deepseek-ai/DeepSeek-V4.1-Flash` (both arms)
+Repetitions: 1 per fixture per arm (18 runs)
+Caps: `--max-cost 0.20 --max-time 300`, unchanged
+Ground truth: hidden; only each fixture was copied to a temp cwd
 
-| Metric | Result |
-| --- | ---: |
-| Seeded fixtures with an extracted report | 8/8 |
-| Top-three hit rate | 8/8 (100.0%) |
-| Generic recommendations (title heuristic) | 0/24 (0.0%) |
-| Clean-control recommendations (corrected control) | 2 |
-| Clean-control MUST FIX / OWNER false positives (corrected control) | 0 |
-| Unverified presented as fact | 0/24 (0.0%) |
+| Metric | Genie | Baseline |
+| --- | ---: | ---: |
+| Runs with a report | 9/9 | 9/9 |
+| Seeded runs scored | 8 | 8 |
+| Top-three hit rate | 8/8 (100.0%) | 8/8 (100.0%) |
+| Generic recommendations (title heuristic) | 0/25 (0.0%) | 0/27 (0.0%) |
+| Clean-control recommendations | 2 | 3 |
+| Clean-control high-severity false positives | 1 | 1 |
+| Unverified claims presented as fact | 0/25 (0.0%) | 0/27 (0.0%) |
+| Actual reported spend | $0.100310 | $0.034986 |
+| **Total actual spend** | **$0.135296** | |
 
-| Fixture | Status | Hit | Recommendations | Generic | MUST FIX/OWNER false positives |
-| --- | --- | --- | ---: | ---: | ---: |
-| `security-token` | ok | yes | 3 | 0 | 0 |
-| `tests-missing` | ok | yes | 3 | 0 | 0 |
-| `perf-quadratic` | ok | yes | 2 | 0 | 0 |
-| `docs-drift` | ok | yes | 3 | 0 | 0 |
-| `deps-duplicate` | ok | yes | 2 | 0 | 0 |
-| `architecture-duplicate` | ok | yes | 3 | 0 | 0 |
-| `roadmap-gap` | ok | yes | 3 | 0 | 0 |
-| `release-ops` | ok | yes | 3 | 0 | 0 |
-| `clean-control` | ok | n/a | 2 | 0 | 0 (corrected rerun) |
+Per-fixture hit and cost:
 
-### The clean-control history
+| Fixture | Genie hit | Baseline hit | Genie cost | Baseline cost |
+| --- | --- | --- | ---: | ---: |
+| `security-token` | yes | yes | $0.013573 | $0.003347 |
+| `tests-missing` | yes | yes | $0.014820 | $0.007208 |
+| `perf-quadratic` | yes | yes | $0.009907 | $0.005084 |
+| `docs-drift` | yes | yes | $0.010224 | $0.001885 |
+| `deps-duplicate` | yes | yes | $0.008788 | $0.002904 |
+| `architecture-duplicate` | yes | yes | $0.008629 | $0.002084 |
+| `roadmap-gap` | yes | yes | $0.011901 | $0.002686 |
+| `release-ops` | yes | yes | $0.009448 | $0.000997 |
+| `clean-control` | n/a | n/a | $0.013022 | $0.008790 |
 
-The full-suite run used the original clean-control fixture and found two `OWNER DECISION REQUIRED`
-items. Inspection showed both were real gaps in the fixture's own contract, not fabricated findings:
+### What this shows
 
-1. the README promised that non-string input throws, but `slugify` accepted `new String(...)` and
-   duck-typed objects that exposed `.trim()`;
-2. the README said input was lowercased before ASCII filtering, but the source trimmed first and the
-   wording did not describe Unicode case-folding (U+212A, U+0130).
+- **No measured discovery advantage on this tiny suite.** The plain prompt found the seeded issue in
+  all eight seeded fixtures, exactly like Genie. Genie also did not reduce generic titles or
+  unverified-as-fact claims on these fixtures: both were 0.
+- **Genie produced fewer recommendations** (25 vs 27) and cost about **2.9×** more
+  ($0.100310 vs $0.034986).
+- **The clean-control high-severity counts are 1 vs 1.** Genie's flag was an `OWNER DECISION
+  REQUIRED` about Unicode normalization policy; the baseline's was a section containing "fails"
+  about a missing package `exports` field. Both are constructive, not fabricated defects. The
+  keyword/classification rules are coarse; inspect the saved reports rather than treating either
+  count as precision.
+- **What the metrics do not score:** evidence-citation checking, exact copy-ready prompts, the
+  structured lens sweep, the static-only safety boundary, or consent-gated judge disclosure. Those
+  are product properties, not measured recommendation quality.
 
-Those were flaws in the control fixture, so the fixture was corrected: an explicit string guard, a
-stable error message, edge-case tests, and precise wording. The corrected clean control was rerun on
-the same model/configuration. It produced two `FUTURE WORK` suggestions (an error-type assertion and a
-redundant trim), no `MUST FIX` or `OWNER DECISION`, so the corrected control's high-severity false
-positive count is 0.
+### Cases where Genie adds nothing over the plain prompt
 
-Both the original and corrected clean-control runs are in `evals/.runs/`. The original run is not
-hidden; its two findings demonstrate that the model can surface real contract gaps, not only seeded
-ones.
+All eight seeded fixtures: both arms hit the seeded issue, both had 0 generic titles, both had 0
+unverified-as-fact claims. Clean control: Genie 2 recommendations and 1 heuristic high-severity
+flag; baseline 3 and 1. This is a negative result for the claim that Genie is demonstrably more
+useful on these fixtures, and it is reported as such.
 
-### Security-token fixture after literal removal
+### Interpretation
 
-The security-token fixture no longer stores a provider-shaped credential. Its repository copy uses a
-neutral placeholder, and the harness injects a runtime-built fake Stripe test token into the
-disposable temp copy. The fixture was rerun after that change:
+These numbers do not establish that Genie is worse either: the fixture set is tiny, synthetic, and
+single-run, and the plain prompt is a strong baseline on a repository whose README names the seeded
+problem. They do establish that the repository cannot claim a measured top-three or evidence-discipline
+advantage from this run. Do not describe Genie as more accurate, more precise, or calibrated.
 
-- Run: 2026-11-27T07:55:33Z
-- Result: 3 recommendations, seeded hit yes, 0/3 generic-titled, 0/3 unverified-as-fact, model
-  `deepseek-ai/DeepSeek-V4.1-Flash`.
-- The seeded hardcoded-credential issue was still found. This matches the original full-suite result
-  for that fixture.
-
-### What this does and does not show
-
-- It shows the workflow can find the seeded issue in each of the eight seeded fixtures under this
-  single model/run configuration, and that the tool's unverified-prompt rule held in every rendered
-  recommendation.
-- It does not establish accuracy, precision, recall, calibration, or generalisation. The fixtures are
-  tiny and synthetic, the terms are broad, and there is one run per fixture.
-- An earlier harness version failed to extract four reports because it only accepted assistant messages
-  beginning with the report header. The extension now emits the authoritative report as a custom
-  `genie-report` row, and the harness prefers that row; the table above is from the rerun with the
-  fixed extractor. The earlier failures were harness defects, not missing model reports.
-
-Raw output, extracted reports, and stderr logs are under `evals/.runs/<timestamp>/` (gitignored).
 
 ## Interpretation limits
 
-- One run per fixture; model nondeterminism is unmeasured.
+- One run per fixture per arm. Model nondeterminism is unmeasured.
 - The fixtures are intentionally tiny and synthetic. They test whether the workflow can find
   documented issues, not whether it generalises to large repositories.
-- Term matching can count a passing mention as a hit and can miss a correct finding phrased
-  differently.
+- The baseline severity/citation rules are keyword heuristics, not a semantic judge.
 - The clean control is one repository, not a statistical control set.
 - No independent judge ran in these headless evaluations; judge quality is not measured here.
 - Do not describe these results as accuracy, precision, recall, or calibration.

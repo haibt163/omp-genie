@@ -1,9 +1,14 @@
-# Phase 0 verification
+# Phase 0 verification (historical)
 
 Date: 2026-11-27
 Target host: OMP 19.2.1
-Repository: local `omp-genie` (feature branch `feat/genie-mvp`)
-Status: **PROCEED WITH LIMITATIONS**
+Repository: local `omp-genie` (historical branch `feat/genie-mvp`)
+Status at the gate: **PROCEED WITH LIMITATIONS**
+
+> **Historical record.** The branch, status, and design statements below describe the Phase 0 gate
+> and early implementation. They are not the current branch or current release status. Do not treat
+> "read-only git commands are allowed" or "version-gated judge" as current behaviour; the hardening
+> update at the end of this file supersedes them. Phase 0 findings are preserved, not rewritten.
 
 This document records Phase 0 only. No implementation code, OMP configuration, credentials, or
 other project repositories were changed.
@@ -485,3 +490,63 @@ verification document stays honest.
 The live run also showed that the main model can execute read-only verification commands (`npm run
 start`, `npm run build`, a port check) during the Genie turn. The extension itself did not modify the
 fixture; the fixture was a disposable temp copy.
+
+---
+
+## Hardening update (2026-11-27)
+
+This section supersedes the Phase 0/Phase 2 behaviour statements above. The old findings are kept
+as history; the current branch is `hardening/pre-announce` from `main` at `962cb55`.
+
+### Execution safety
+
+The earlier live run executed `npm run start`, `npm run build`, and a port check because `/genie`
+left the normal active tools enabled and the model chose to run them. That is now removed at the OMP
+tool level.
+
+| Check | Evidence | Result | Status |
+| --- | --- | --- | --- |
+| Static allowlist unit tests | `test/safety.test.ts` | Default and `--verify` activate only `read`, `grep`, `glob`, `genie_rank`; execution tool blocked; snapshot restored after completion, continue, send failure, and session switch | VERIFIED |
+| Live marker fixture | `GENIE_SAFETY_EVAL=1 npm run safety:live` on 19.2.1 | Default `/genie`: tools `genie_rank, glob, grep, read`; marker file absent; no bash/eval/task call with `--auto-approve`. `--verify`: same, proposed-command section present, marker absent | VERIFIED |
+| Fail-closed host check | extension reads active set after `setActiveTools` | Unexpected tool → restore and refuse to start | VERIFIED in unit tests |
+| Git/gh evidence | removed from default mode | Static-only cannot run external programs; reports mark dependent lenses `not_inspected`/UNVERIFIED | VERIFIED (loss documented) |
+| Verification execution | not implemented in-extension | Report prints exact proposed commands; Genie does not run them | OWNER DECISION: proposal-only is the fail-closed choice |
+
+### Independent judge
+
+The 19.2.x version regex is replaced by runtime capability checks. 19.2.1 passes the probe; the
+network call remains unverified because no consent-based interactive owner run was performed.
+
+| Check | Evidence | Result | Status |
+| --- | --- | --- | --- |
+| Capability probe | `omp --mode json -p "/genie-canary" --no-session -e scripts/omp-capability-probe.ts` | Import, `resolveJudge`, settings, judge resolution, methods, primary model, adapter shape all true | VERIFIED |
+| Primary judge route | same probe | `typesafe/jev-1.14.0` via `typesafe`, endpoint host `api.typesafe.ai` | VERIFIED |
+| Fallback enumeration | same probe | `resolveRoleChain("judge", …)` returned the configured chain (one candidate); internal subpaths may be absent on other builds, in which case the dialog states the route source | VERIFIED on 19.2.1 |
+| Answer-id and attribution validation | deterministic tests | Missing answer id or missing provider/model/API → degraded, never invented | VERIFIED |
+| Consent disclosure | deterministic tests and code | Primary provider/model/API/host, fallbacks or route source, evidence bytes, redaction warning | VERIFIED (mocked UI) |
+| Real consent-based judge call | `scripts/judge-acceptance.ps1` | Script written; not run in this pass | UNVERIFIED |
+| CI canary | `.github/workflows/omp-canary.yml` | Manual workflow; not run in this pass | UNVERIFIED |
+
+### Evaluation
+
+The live harness now has Genie and plain-prompt arms with the same fixtures, model, read-only tools,
+budget, timeout, and hidden ground truth. The final 18-run comparison (1 repetition per fixture per
+arm, $0.20 cap, $0.135296 actual spend) found:
+
+- top-three hit rate: Genie 8/8, baseline 8/8;
+- generic titles: 0/25 vs 0/27;
+- clean-control high-severity flags: 1 vs 1 (both constructive, per the saved reports);
+- unverified-as-fact: 0/25 vs 0/27;
+- actual spend: $0.100310 vs $0.034986 (Genie about 2.9x).
+
+This is a negative result for "demonstrably more useful" on these fixtures: the plain prompt matched
+every seeded hit and the coarse evidence metrics. Genie's structure, citation checks, exact prompts,
+and safety boundary are not scored by these metrics. See `docs/evals.md` for the full side-by-side,
+per-fixture costs, metric limits, and every case where Genie adds nothing.
+
+### Installation and CI
+
+`README.md` now documents `git clone`, `omp -e`, `omp plugin install`, `omp plugin list`, and
+`omp plugin uninstall` for Windows and macOS/Linux. `omp plugin install` was not exercised against the
+owner's OMP environment. `npm run check` is the deterministic gate; full runtime on macOS/Linux remains
+UNVERIFIED even when CI passes.

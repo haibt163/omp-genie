@@ -82,7 +82,7 @@ function messageText(message: Record<string, unknown>): string {
 
 function extractReport(jsonl: string, arm: Arm): { report?: string; model?: string; usage: UsageTotals } {
 	let customReport: string | undefined;
-	let assistantReport: string | undefined;
+	const assistantParts: string[] = [];
 	let model: string | undefined;
 	const usage: UsageTotals = { input: 0, output: 0, total: 0, costUsd: 0 };
 	for (const line of jsonl.split(/\r?\n/u)) {
@@ -110,8 +110,9 @@ function extractReport(jsonl: string, arm: Arm): { report?: string; model?: stri
 			usage.costUsd +=
 				isRecord(rawUsage.cost) && typeof rawUsage.cost.total === "number" ? rawUsage.cost.total : 0;
 		}
-		if (text.trim().length > 0) assistantReport = text;
+		if (text.trim().length > 0) assistantParts.push(text);
 	}
+	const assistantReport = assistantParts.join("\n\n");
 	return {
 		report: arm === "genie" ? customReport ?? assistantReport : assistantReport,
 		model,

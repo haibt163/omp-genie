@@ -256,7 +256,10 @@ packages. It is not a Claude Code extension and makes no Claude compatibility cl
 - **`/genie-run` is TUI-only** and requires a prior report in the same session. Headless users copy
   the prompt.
 - **Evaluation is not calibration.** The fixture suite is small, single-run, and measured with term
-  matching; it cannot establish statistical significance. See [docs/evals.md](docs/evals.md).
+  matching; it cannot establish statistical significance. The latest 18-run comparison found the
+  plain-prompt baseline matched Genie's 8/8 top-three hits and the coarse evidence metrics; Genie cost
+  about 2.9x more. It is a negative result for "demonstrably more useful" on these fixtures, not a
+  claim of superiority. See [docs/evals.md](docs/evals.md).
 - **Platform testing.** Deterministic CI runs on Windows, macOS, and Linux. Full extension runtime was
   exercised on Windows only.
 
