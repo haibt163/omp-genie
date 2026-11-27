@@ -42,6 +42,8 @@ export interface FakeUi {
 	confirmCalls: number;
 	selectCalls: number;
 	confirmResult: boolean;
+	confirmTitle?: string;
+	confirmMessage?: string;
 	notifications: string[];
 	confirm: (title: string, message: string) => Promise<boolean>;
 	select: (title: string, options: string[]) => Promise<string | undefined>;
@@ -54,8 +56,10 @@ export function fakeUi(confirmResult = true): FakeUi {
 		selectCalls: 0,
 		confirmResult,
 		notifications: [],
-		confirm: async () => {
+		confirm: async (title, message) => {
 			state.confirmCalls += 1;
+			state.confirmTitle = title;
+			state.confirmMessage = message;
 			return state.confirmResult;
 		},
 		select: async () => {

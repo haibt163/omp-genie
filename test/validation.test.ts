@@ -86,3 +86,33 @@ test("rejects duplicate candidate ids", () => {
 	assert.equal(result.ok, false);
 	if (!result.ok) assert.ok(result.errors.some(error => error.includes("unique")));
 });
+
+test("accepts at most three single-line verification commands", () => {
+	const withCommands = structuredClone(baseInput());
+	withCommands.verificationCommands = [
+		{ command: "npm test", purpose: "Run the documented test command." },
+		{ command: "npm run build", purpose: "Check whether the build produces an artifact." },
+	];
+	const accepted = parseGenieInput(withCommands);
+	assert.equal(accepted.ok, true);
+	if (accepted.ok) assert.equal(accepted.value.verificationCommands?.length, 2);
+
+	const tooMany = structuredClone(baseInput());
+	tooMany.verificationCommands = Array.from({ length: 4 }, (_, index) => ({
+		command: `echo ${index}`,
+		purpose: `Command ${index}`,
+	}));
+	const rejectedCount = parseGenieInput(tooMany);
+	assert.equal(rejectedCount.ok, false);
+	if (!rejectedCount.ok) {
+		assert.ok(rejectedCount.errors.some(error => error.includes("at most 3")));
+	}
+
+	const multiline = structuredClone(baseInput());
+	multiline.verificationCommands = [{ command: "npm test\nrm -rf .", purpose: "Injected" }];
+	const rejectedLine = parseGenieInput(multiline);
+	assert.equal(rejectedLine.ok, false);
+	if (!rejectedLine.ok) {
+		assert.ok(rejectedLine.errors.some(error => error.includes("single line")));
+	}
+});

@@ -29,8 +29,9 @@
 	},
 	"scripts": {
 		"typecheck": "tsc -p tsconfig.json --noEmit",
-		"test": "node --experimental-strip-types --test test/validation.test.ts test/evidence.test.ts test/sanitize.test.ts test/scoring.test.ts test/judge.test.ts test/tool.test.ts",
+		"test": "node --experimental-strip-types --test test/validation.test.ts test/evidence.test.ts test/sanitize.test.ts test/scoring.test.ts test/judge.test.ts test/tool.test.ts test/safety.test.ts",
 		"check": "npm run typecheck && npm test",
-		"eval:live": "node --experimental-strip-types scripts/eval-live.ts"
+		"eval:live": "node --experimental-strip-types scripts/eval-live.ts",
+		"safety:live": "node --experimental-strip-types scripts/safety-live.ts"
 	}
 }

@@ -194,3 +194,77 @@ test("rejects subagents and handles zero candidates", async () => {
 		assert.equal(main.ui.confirmCalls, 0);
 	});
 });
+
+test("verification mode lists proposed commands and never claims execution", async () => {
+	await withProject(async cwd => {
+		const { ctx } = fakeContext({ cwd, mode: "print", hasUI: false });
+		const input = baseInput({
+			verificationCommands: [
+				{ command: "npm test", purpose: "Run the documented test command." },
+				{ command: "npm run build", purpose: "Check whether the build writes an artifact." },
+			],
+		});
+		const result = await rankCandidates(structuredClone(input), ctx, undefined, {
+			version: "19.2.1",
+			mode: "verify",
+			probeJudge: async () => fakeProbe(["c1"]),
+		});
+		assert.equal(result.ok, true);
+		assert.match(result.report, /Proposed verification commands \(not executed by Genie\)/u);
+		assert.match(result.report, /npm test/u);
+		assert.match(result.report, /npm run build/u);
+		assert.match(result.report, /Genie did not start a shell, package manager, or project script/u);
+		assert.match(result.report, /\*\*OMP version:\*\* 19\.2\.1/u);
+		assert.match(result.report, /\*\*Main model:\*\* unknown/u);
+		assert.equal(result.stored?.verificationCommands.length, 2);
+	});
+});
+
+test("static mode omits the proposed-command section", async () => {
+	await withProject(async cwd => {
+		const { ctx } = fakeContext({ cwd, mode: "print", hasUI: false });
+		const input = baseInput({
+			verificationCommands: [{ command: "npm test", purpose: "Should not be printed in static mode." }],
+		});
+		const result = await rankCandidates(structuredClone(input), ctx, undefined, options());
+		assert.equal(result.ok, true);
+		assert.doesNotMatch(result.report, /Proposed verification commands/u);
+	});
+});
+
+test("discloses an untested OMP version and the configured fallback candidates", async () => {
+	await withProject(async cwd => {
+		const { ctx, ui } = fakeContext({ cwd, confirmResult: true });
+		const probe = {
+			...fakeProbe(["c1"]),
+			untestedVersion: true,
+			versionWarning: "UNTESTED OMP VERSION 19.3.0; the judge adapter is validated only on 19.2.1",
+			fallbacks: [
+				{
+					provider: "judge-provider",
+					id: "judge-model",
+					api: "test",
+					baseUrl: "https://judge.example/v1",
+				},
+				{
+					provider: "fallback-provider",
+					id: "fallback-model",
+					api: "openai-completions",
+					baseUrl: "https://fallback.example/v1?key=secret",
+				},
+			],
+			fallbackSource: "OMP's judge model-role chain",
+		};
+		const result = await rankCandidates(structuredClone(baseInput()), ctx, undefined, {
+			version: "19.3.0",
+			probeJudge: async () => probe,
+		});
+		assert.equal(result.ok, true);
+		assert.match(ui.confirmMessage ?? "", /UNTESTED OMP VERSION 19\.3\.0/u);
+		assert.match(ui.confirmMessage ?? "", /Configured candidates OMP may try next/u);
+		assert.match(ui.confirmMessage ?? "", /fallback-provider\/fallback-model/u);
+		assert.match(ui.confirmMessage ?? "", /fallback\.example/u);
+		assert.doesNotMatch(ui.confirmMessage ?? "", /key=secret/u);
+		assert.match(result.report, /Judge compatibility:\*\* UNTESTED OMP VERSION 19\.3\.0/u);
+	});
+});

@@ -1,0 +1,36 @@
+name: omp-capability-canary
+
+# Manual only. Installs the latest OMP, loads the capability probe, and records
+# the result. No provider credentials and no judge request are used.
+on:
+  workflow_dispatch:
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Install latest OMP
+        run: npm install --global @oh-my-pi/pi-coding-agent@latest
+      - name: Align the extension's peer package with the installed OMP
+        run: npm install --no-save @oh-my-pi/pi-coding-agent@latest
+      - name: Record versions
+        run: |
+          mkdir -p canary
+          omp --version | tee canary/omp-version.txt
+          node -e "console.log(require('./node_modules/@oh-my-pi/pi-coding-agent/package.json').version)" | tee canary/package-version.txt
+      - name: Run capability probe
+        run: |
+          omp --mode json -p "/genie-canary" --no-session -e scripts/omp-capability-probe.ts \
+            > canary/events.jsonl 2> canary/stderr.log
+          grep -o 'CANARY:.*' canary/stderr.log | sed 's/^CANARY://' > canary/probe.json
+          cat canary/probe.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: omp-genie-canary
+          path: canary/

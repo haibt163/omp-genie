@@ -8,6 +8,7 @@ import {
 	type JudgeOutcome,
 	type StoredReport,
 } from "./types.ts";
+import type { GenieMode } from "./safety.ts";
 
 const CHECK_LABELS: Record<EvidenceCheck["check"], string> = {
 	verified: "verified quote",
@@ -79,8 +80,14 @@ function judgeSection(evaluation: CandidateEvaluation, outcome: JudgeOutcome): s
 		`**Independent judge:** ${backend} — ${kind}.`,
 		`- Generic-advice probability: ${percent(answers.generic)} (cap applies at 65.0%).`,
 		`- Evidence-support probability: ${percent(answers.support)}.`,
-		`- Impact score: ${answers.impact.score.toFixed(2)}/4 (confidence ${answers.impact.confidence.toFixed(2)}).`,
+		`- Impact score: ${answers.impact.score.toFixed(2)}/4 (confidence ${answers.impact.confidence.toFixed(2)}). Advisory/display-only; it is not used in the heuristic total.`,
 	];
+	if (outcome.answerIds !== undefined) {
+		lines.push(`- Answer ids: ${outcome.answerIds.length} expected, all present and validated.`);
+	}
+	if (outcome.untestedVersion === true) {
+		lines.push(`- ${clean(outcome.versionWarning ?? "UNTESTED OMP VERSION")}. Capability checks passed.`);
+	}
 	if (outcome.usage !== undefined) {
 		const cost = outcome.usage.costUsd === undefined
 			? "cost not reported"
@@ -163,14 +170,49 @@ function recommendationSection(
 	return lines;
 }
 
+function verificationSection(input: GenieInput, mode: GenieMode): string[] {
+	if (mode !== "verify") return [];
+	const commands = input.verificationCommands ?? [];
+	const lines = ["**Proposed verification commands (not executed by Genie):**", ""];
+	if (commands.length === 0) {
+		lines.push("None proposed. The findings remain static-analysis leads.");
+		lines.push("");
+		return lines;
+	}
+	for (let index = 0; index < commands.length; index += 1) {
+		const entry = commands[index];
+		if (entry === undefined) continue;
+		lines.push(`${index + 1}. ${clean(entry.purpose)}`);
+		lines.push("");
+		lines.push(fence(clean(entry.command)));
+		lines.push("");
+	}
+	lines.push("Run these yourself. OMP Genie did not start a shell, package manager, or project script.");
+	lines.push("");
+	return lines;
+}
+
 export function formatReport(
 	input: GenieInput,
 	evaluations: CandidateEvaluation[],
 	outcome: JudgeOutcome,
 	interactive: boolean,
+	mode: GenieMode,
+	version: string,
+	mainModel?: { provider: string; id: string },
 ): string {
 	const lines: string[] = [];
 	lines.push(`# OMP Genie — ${focusLabel(input.focus)}`);
+	lines.push("");
+	lines.push(
+		mode === "verify"
+			? "**Execution mode:** static-only analysis. Proposed commands are listed below for you to run; Genie did not execute them."
+			: "**Execution mode:** static-only. Genie activated only read, grep, and glob; no shell, package manager, or project script was available.",
+	);
+	lines.push(`**OMP version:** ${clean(version)}.`);
+	lines.push(
+		`**Main model:** ${mainModel === undefined ? "unknown" : `${clean(mainModel.provider)}/${clean(mainModel.id)}`}.`,
+	);
 	lines.push("");
 	lines.push(`**Project goals (as understood):** ${clean(input.projectGoals)}`);
 	lines.push("");
@@ -180,6 +222,7 @@ export function formatReport(
 	lines.push(`**Inspected lenses:** ${summary.inspected.length > 0 ? summary.inspected.join(", ") : "none"}.`);
 	lines.push(`**Not inspected / unavailable:** ${summary.skipped.length > 0 ? summary.skipped.join(", ") : "none"}.`);
 	lines.push("");
+	lines.push(...verificationSection(input, mode));
 	lines.push("| Lens | Result |");
 	lines.push("| --- | --- |");
 	for (const report of input.lenses) {
@@ -191,6 +234,11 @@ export function formatReport(
 		lines.push(
 			`**Independent judgement used:** ${clean(outcome.api ?? "unknown")} / ${clean(outcome.provider ?? "unknown")} / ${clean(outcome.model ?? "unknown")}.`,
 		);
+		if (outcome.untestedVersion === true) {
+			lines.push(
+				`**Judge compatibility:** ${clean(outcome.versionWarning ?? "UNTESTED OMP VERSION")}. Capability checks passed; the adapter is not validated on this version.`,
+			);
+		}
 	} else if (evaluations.length === 0) {
 		lines.push("**Independent judgement:** not requested — no candidates to judge.");
 	} else {
@@ -228,6 +276,10 @@ export function storedReport(
 			title: clean(evaluation.candidate.title),
 			classification: evaluation.classification,
 			prompt: clean(evaluation.nextPrompt),
+		})),
+		verificationCommands: (input.verificationCommands ?? []).map(entry => ({
+			command: clean(entry.command),
+			purpose: clean(entry.purpose),
 		})),
 	};
 }

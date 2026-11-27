@@ -97,12 +97,18 @@ export interface LensReport {
 	note?: string;
 }
 
+export interface VerificationCommandInput {
+	command: string;
+	purpose: string;
+}
+
 export interface GenieInput {
 	projectGoals: string;
 	focus: Focus;
 	assumptions: string;
 	lenses: LensReport[];
 	candidates: CandidateInput[];
+	verificationCommands?: VerificationCommandInput[];
 }
 
 export type EvidenceCheckCode =
@@ -161,6 +167,10 @@ export interface JudgeOutcome {
 	kind?: "native" | "prompted" | "unknown";
 	usage?: JudgeUsage;
 	byCandidate?: JudgeCandidateAnswers[];
+	answerIds?: string[];
+	validation?: "all_answer_ids_present";
+	untestedVersion?: boolean;
+	versionWarning?: string;
 }
 
 export interface ScoreBreakdown {
@@ -194,6 +204,7 @@ export interface StoredReport {
 	focus: Focus;
 	createdAt: number;
 	recommendations: StoredRecommendation[];
+	verificationCommands: VerificationCommandInput[];
 }
 
 export interface RankingResult {
